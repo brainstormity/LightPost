@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { guides } from '../web/guides.js';
+import { toolGuides } from '../web/tool-guides.js';
 
 // Exercise delegated dialog actions without a browser or social account.
 test('dialogs, retry actions, and cancellation controls', async () => {
@@ -48,6 +49,7 @@ test('dialogs, retry actions, and cancellation controls', async () => {
   const context = vm.createContext({
     document,
     guides,
+    toolGuides,
     window: {
       addEventListener(type, callback) {
         windowHandlers[type] = callback;
@@ -61,7 +63,7 @@ test('dialogs, retry actions, and cancellation controls', async () => {
     console,
   });
   const source = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8')
-    .replace(/^import .*\n/, '')
+    .replace(/^import .*\n/gm, '')
     .replace(/\ninit\(\);\s*$/, '');
   vm.runInContext(source, context);
   vm.runInContext(
@@ -143,6 +145,25 @@ test('dialogs, retry actions, and cancellation controls', async () => {
   }
   vm.runInContext("location.hash = '#docs'; renderDocs();", context);
   assert.ok(pageElement.innerHTML.includes('<h1>Setup Guide</h1>'));
+  for (const guide of toolGuides) {
+    assert.ok(pageElement.innerHTML.includes(`href="#docs/${guide.id}"`), guide.id);
+  }
+  for (const guide of toolGuides) {
+    vm.runInContext(
+      `location.hash = ${JSON.stringify('#docs/' + guide.id)}; renderDocs();`,
+      context,
+    );
+    const html = pageElement.innerHTML;
+    assert.ok(html.includes(`<h1>${guide.name}</h1>`), guide.id);
+    assert.equal(html.split('class="docs-section docs-step"').length - 1, guide.steps.length);
+    for (const image of guide.steps.flatMap((step) => step.images || [])) {
+      assert.ok(existsSync(new URL(`../web${image.src}`, import.meta.url)), image.src);
+      assert.ok(image.alt.length > 0, image.src);
+    }
+    // Only placeholders, never a real key.
+    assert.ok(!/lp_[A-Za-z0-9_-]{20,}/.test(html), guide.id);
+  }
+  vm.runInContext("location.hash = '#docs'; renderDocs();", context);
 
   const retryIds = vm.runInContext(
     `retryAccountIds({
@@ -351,6 +372,7 @@ test('multi-platform preview shows X images and follows its image toggle', () =>
   const context = vm.createContext({
     document,
     guides,
+    toolGuides,
     window: { addEventListener() {} },
     location: { hash: '', pathname: '/app' },
     setInterval() {},
@@ -359,7 +381,7 @@ test('multi-platform preview shows X images and follows its image toggle', () =>
     Intl,
   });
   const source = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8')
-    .replace(/^import .*\n/, '')
+    .replace(/^import .*\n/gm, '')
     .replace(/\ninit\(\);\s*$/, '');
   vm.runInContext(source, context);
   vm.runInContext(

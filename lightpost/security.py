@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import secrets
 from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -38,3 +39,35 @@ class Vault:
             raise ValueError(
                 "Cannot unlock this account. Restore its original encryption key or reconnect it."
             ) from None
+
+
+def new_api_key():
+    return "lp_" + secrets.token_urlsafe(32)
+
+
+def load_api_key(directory="data"):
+    """Return the saved API key, creating a private one on first use (like credentials.key)."""
+    path = Path(directory) / "api.key"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        key = path.read_text().strip()
+        if len(key) >= 24:
+            return key
+        return save_api_key(directory, new_api_key())  # Empty or damaged file: replace it.
+    key = new_api_key()
+    with os.fdopen(fd, "w") as file:
+        file.write(key)
+    return key
+
+
+def save_api_key(directory, key):
+    """Atomically replace the saved key; the old one stops working immediately."""
+    path = Path(directory) / "api.key"
+    temporary = path.with_name("api.key.new")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as file:
+        file.write(key)
+    os.replace(temporary, path)
+    return key

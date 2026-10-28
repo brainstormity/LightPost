@@ -22,6 +22,10 @@ class Config:
     password: str = ""
     key: str = ""
     secure_cookie: bool = False
+    api_key: str = ""
+    api_enabled: bool = True
+    public_url: str = ""  # PUBLIC_URL: an https address you provide yourself
+    say: object = print  # Where the public-address instructions are printed.
     interval: float = 3
     scheduler: bool = True
     web_root: str = "web"
@@ -37,7 +41,19 @@ class Config:
             key=os.getenv("ENCRYPTION_KEY", ""),
             web_root=os.getenv("WEB_ROOT", "web"),
             secure_cookie=os.getenv("COOKIE_SECURE") == "true",
+            api_key=os.getenv("API_KEY", "").strip(),
+            api_enabled=os.getenv("API_ENABLED", "true").strip().lower() != "false",
+            public_url=os.getenv("PUBLIC_URL", "").strip(),
         )
+        if config.public_url:
+            from .remote import clean_public_url
+
+            config.public_url = clean_public_url(config.public_url)
+        if config.api_key and len(config.api_key) < 24:
+            raise ValueError(
+                "API_KEY must be at least 24 characters. Remove it to let LightPost create "
+                "and save a key for you (see Settings)."
+            )
         if config.host not in ("127.0.0.1", "localhost", "::1") and len(config.password) < 16:
             raise ValueError("Set ADMIN_PASSWORD (16+ characters) before binding beyond loopback.")
         return config

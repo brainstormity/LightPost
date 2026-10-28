@@ -76,6 +76,14 @@ class Store:
             posts = [json.loads(row[0]) for row in await cursor.fetchall()]
         return posts, total
 
+    async def post_with_key(self, key):
+        async with self.db.execute(
+            "SELECT value FROM records WHERE kind='posts' AND json_extract(value, '$.idempotencyKey')=? LIMIT 1",
+            (key,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return json.loads(row[0]) if row else None
+
     async def due(self, now, limit=2):
         async with self.db.execute(
             "SELECT value FROM records WHERE kind='posts' AND (json_extract(value, '$.status')='queued' OR (json_extract(value, '$.status')='scheduled' AND json_extract(value, '$.scheduledAt')<=?) OR (json_extract(value, '$.status')='processing' AND COALESCE(json_extract(value, '$.nextCheckAt'),'')<=?)) ORDER BY json_extract(value, '$.scheduledAt') LIMIT ?",

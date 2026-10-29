@@ -696,6 +696,7 @@ async def automation_info(request):
             "enabled": automation["enabled"],
             "locked": automation["locked"],
             "source": automation["source"],
+            "envIgnored": automation["envIgnored"],
             "key": app[KEYS["config"]].api_key,
         }
     )
@@ -709,7 +710,10 @@ async def automation_update(request):
         raise ValueError("API access is switched off by API_ENABLED=false in .env.")
     if not isinstance(data.get("enabled"), bool):
         raise ValueError("Choose on or off.")
-    await app[KEYS["store"]].put("settings", {"id": "automation", "enabled": data["enabled"]})
+    await app[KEYS["store"]].put(
+        "settings",
+        {"id": "automation", "enabled": data["enabled"], "managed": automation["envIgnored"]},
+    )
     automation["enabled"] = data["enabled"]
     return await automation_info(request)
 
@@ -718,7 +722,12 @@ async def automation_regenerate(request):
     app = request.app
     automation = app[KEYS["automation"]]
     if automation["source"] != "file":
-        raise ValueError("This key comes from API_KEY in .env. Change it there and restart.")
+        # The key came from API_KEY in .env. LightPost cannot rewrite that file, so from now on
+        # it manages its own key (in data/) and ignores the API_KEY line, now and after restarts.
+        store = app[KEYS["store"]]
+        record = await store.get("settings", "automation") or {"id": "automation"}
+        await store.put("settings", {**record, "id": "automation", "managed": True})
+        automation.update({"source": "file", "envIgnored": True})
     # The old key stops working as soon as the new one is saved.
     app[KEYS["config"]].api_key = await asyncio.to_thread(
         save_api_key, automation["directory"], new_api_key()
@@ -753,12 +762,16 @@ async def lifecycle(app):
         media_dir.mkdir(parents=True, exist_ok=True)
         jobs = Scheduler(store, providers, media_dir, config.interval)
         # API key: API_KEY in .env wins; otherwise LightPost creates one and keeps it in data/.
+        switch = await store.get("settings", "automation") or {}
+        ignored = bool(config.api_key) and switch.get("managed") is True
+        if ignored:  # The person chose "Regenerate" in Settings: LightPost manages the key now.
+            config.api_key = ""
         source = "environment" if config.api_key else "file"
         config.api_key = config.api_key or load_api_key(directory)
-        switch = await store.get("settings", "automation") or {}
         automation = {
             "directory": directory,
             "source": source,
+            "envIgnored": ignored or switch.get("managed") is True,
             "locked": not config.api_enabled,
             "enabled": config.api_enabled and switch.get("enabled", True) is not False,
         }

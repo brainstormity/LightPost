@@ -76,7 +76,9 @@ def clean_config_path(value):
     return str(path)
 
 
-def instructions(address, key):
+def instructions(address):
+    """What is printed on startup. The key is never printed here, so a screenshot of the terminal
+    cannot leak it. Settings > Automation shows it, or run: python -m lightpost api-key."""
     return "\n".join(
         [
             "",
@@ -84,11 +86,13 @@ def instructions(address, key):
             "",
             "  MCP server (send the key as an 'Authorization: Bearer <key>' header):",
             f"    {address}/mcp",
-            "  MCP connector address for tools that cannot send headers (the key is in it,",
-            "  so keep it private):",
-            f"    {address}/mcp/{key}",
+            "  MCP connector address for tools that cannot send headers:",
+            f"    {address}/mcp/<your key>",
             "  REST API:",
             f"    {address}/api/v1   (OpenAPI: {address}/api/v1/openapi.json)",
+            "",
+            "  Your key is not shown here. Copy it, or the full connector address, from",
+            "  Settings > Automation, or run: python -m lightpost api-key",
             "",
         ]
     )
@@ -280,7 +284,7 @@ class Remote:
 
     def announce(self, address):
         self.set("running", url=address)
-        self.say(instructions(address, self.config.api_key))
+        self.say(instructions(address))
 
     async def run_ngrok(self, program, domain, token, config=""):
         env = dict(os.environ)  # Keeps an NGROK_AUTHTOKEN or ngrok.yml the person already has.

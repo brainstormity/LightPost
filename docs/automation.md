@@ -49,7 +49,7 @@ Claude on the web cannot reach localhost, so first give LightPost a public addre
 
 Any MCP client that supports streamable HTTP can use LightPost’s MCP server at `/mcp`. On the same computer you can use the local address. This guide’s commands follow each tool’s documentation and have not all been tried against every client.
 
-1. **Get your key.** Open Settings → Automation → API key and press Show and Copy. Or run `python -m lightpost api-key` in the LightPost folder.
+1. **Get your key.** Open Settings → Automation → API key and press Copy (or Show to read it). Press Regenerate for a new one. Or run `python -m lightpost api-key` in the LightPost folder.
 
 2. **Claude Code.** Run this in a terminal, with your key in place of YOUR_API_KEY.
 

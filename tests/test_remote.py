@@ -175,12 +175,13 @@ class SettingsTests(RemoteCase):
                 clean_domain(bad)
 
     def test_instructions_cover_every_way_to_connect(self):
-        text = instructions("https://a.example.dev", "lp_secret")
+        text = instructions("https://a.example.dev")
         for expected in (
             "https://a.example.dev/mcp",
-            "https://a.example.dev/mcp/lp_secret",
+            "https://a.example.dev/mcp/<your key>",
             "/api/v1",
             "Authorization: Bearer",
+            "python -m lightpost api-key",
         ):
             self.assertIn(expected, text)
 
@@ -234,7 +235,8 @@ class OwnAddressTests(RemoteCase):
             (info["status"], info["url"], info["publicUrl"]),
             ("running", "https://lp.example.com", "https://lp.example.com"),
         )
-        self.assertIn(f"https://lp.example.com/mcp/{API_KEY}", self.said[0])
+        self.assertIn("https://lp.example.com/mcp/<your key>", self.said[0])
+        self.assertNotIn(API_KEY, self.said[0])
         self.assertEqual(self.pids("ng.pids"), [])
         self.assertIsNone(self.remote.task)
 
@@ -296,7 +298,8 @@ class NgrokTests(RemoteCase):
         self.assertIn(f"127.0.0.1:{self.config.port}", arguments)
         self.assertNotIn(NGROK_TOKEN, arguments)  # Not visible in the process list.
         self.assertEqual((self.root / "ng.token").read_text().strip(), NGROK_TOKEN)
-        self.assertIn(f"https://my-name.ngrok-free.app/mcp/{API_KEY}", self.said[0])
+        self.assertIn("https://my-name.ngrok-free.app/mcp/<your key>", self.said[0])
+        self.assertNotIn(API_KEY, self.said[0])
 
     async def test_the_token_is_stored_encrypted_and_never_sent_back(self):
         self.fake_ngrok()

@@ -89,7 +89,7 @@ export const toolGuides = [
     steps: [
       {
         title: 'Get your key',
-        text: 'Open Settings → Automation → API key and press Show and Copy. Or run `python -m lightpost api-key` in the LightPost folder.',
+        text: 'Open Settings → Automation → API key and press Copy (or Show to read it). Press Regenerate for a new one. Or run `python -m lightpost api-key` in the LightPost folder.',
         images: [
           {
             src: '/images/tools/automation-panel.png',

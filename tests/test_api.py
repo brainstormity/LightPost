@@ -795,7 +795,14 @@ class AutoKeyTests(AutoKeyBase):
     async def test_settings_page_can_read_the_key_but_only_with_a_ui_session(self):
         info = await (await self.client.get("/api/automation")).json()
         self.assertEqual(
-            info, {"enabled": True, "locked": False, "source": "file", "key": self.key}
+            info,
+            {
+                "enabled": True,
+                "locked": False,
+                "source": "file",
+                "envIgnored": False,
+                "key": self.key,
+            },
         )
         headers = {"Host": "lightpost.example.com"}
         self.assertEqual((await self.client.get("/api/automation", headers=headers)).status, 403)
@@ -839,17 +846,45 @@ class AutoKeyTests(AutoKeyBase):
         for bad in ({"enabled": "yes"}, {}):
             self.assertEqual((await self.client.put("/api/automation", json=bad)).status, 400)
 
-    async def test_environment_override_wins_and_cannot_be_regenerated(self):
+    async def start_with_environment_key(self):
         await self.client.close()
         config = Config(database=self.config.database, key=KEY, scheduler=False, api_key=API_KEY)
         self.client = TestClient(TestServer(create_app(config, self.send)))
         await self.client.start_server()
+
+    async def test_environment_key_wins_by_default(self):
+        await self.start_with_environment_key()
         info = await (await self.client.get("/api/automation")).json()
-        self.assertEqual((info["source"], info["key"]), ("environment", API_KEY))
+        self.assertEqual(
+            (info["source"], info["key"], info["envIgnored"]), ("environment", API_KEY, False)
+        )
         self.assertEqual((await self.client.get("/api/v1/accounts", headers=AUTH)).status, 200)
+
+    async def test_regenerating_an_environment_key_hands_control_to_lightpost(self):
+        await self.start_with_environment_key()
         response = await self.client.post("/api/automation/regenerate")
-        self.assertEqual(response.status, 400)
-        self.assertIn("API_KEY", (await response.json())["error"])
+        self.assertEqual(response.status, 200)
+        info = await response.json()
+        new = info["key"]
+        self.assertNotIn(new, (API_KEY, ""))
+        self.assertEqual((info["source"], info["envIgnored"]), ("file", True))
+        self.assertEqual(self.key_file.read_text().strip(), new)
+        # The old .env key stops working at once, the new one works.
+        self.assertEqual((await self.client.get("/api/v1/accounts", headers=AUTH)).status, 401)
+        self.assertEqual(
+            (await self.client.get("/api/v1/accounts", headers=self.auth(new))).status, 200
+        )
+        # After a restart the API_KEY line in .env is still ignored.
+        await self.start_with_environment_key()
+        info = await (await self.client.get("/api/automation")).json()
+        self.assertEqual((info["key"], info["source"], info["envIgnored"]), (new, "file", True))
+        self.assertEqual((await self.client.get("/api/v1/accounts", headers=AUTH)).status, 401)
+        # Regenerating again keeps working, and the on/off switch keeps the choice.
+        await self.client.put("/api/automation", json={"enabled": False})
+        await self.client.put("/api/automation", json={"enabled": True})
+        await self.start_with_environment_key()
+        info = await (await self.client.get("/api/automation")).json()
+        self.assertEqual((info["key"], info["envIgnored"]), (new, True))
 
     async def test_connector_address_carries_the_key_for_tools_without_headers(self):
         body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}

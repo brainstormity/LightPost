@@ -90,7 +90,8 @@ Scripts, [n8n](https://n8n.io), Claude, or any other bot can create, schedule, e
 There is nothing to set up. LightPost creates a private API key the first time it starts and keeps it in your data folder (`data/api.key`). Open **Settings → Automation** to see it, copy it, copy ready-made connection addresses, turn access off, or create a new key. A new key stops the old one working immediately.
 
 - `.venv/bin/python -m lightpost api-key` prints the key in a terminal.
-- Set `API_KEY` in `.env` if you would rather choose your own, and `API_ENABLED=false` to switch the API off completely.
+- Set `API_KEY` in `.env` if you would rather choose your own, and `API_ENABLED=false` to switch the API off completely. If you set `API_KEY` and later press **Regenerate** in Settings, LightPost creates and manages its own key from then on and ignores the `API_KEY` line, so you can delete it.
+- The key is never printed in the startup messages, so a screenshot of the terminal does not leak it. Copy it from Settings, or use the command above.
 
 Treat the key like a password: it can post to every connected account.
 

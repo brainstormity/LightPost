@@ -22,7 +22,7 @@ from .providers import (
     image_url,
     now,
 )
-from .security import Vault
+from .security import Vault, load_api_key, new_api_key, save_api_key
 from .store import Store
 
 
@@ -36,6 +36,8 @@ KEYS = {
         "vault",
         "providers",
         "jobs",
+        "automation",
+        "remote",
         "test_transport",
     ]
 }
@@ -69,14 +71,49 @@ async def read_json(request):
     return value
 
 
+def authorize_api(request):
+    """Automation endpoints (/api/v1, /mcp) use an API key, not the browser session.
+
+    The key goes in an Authorization: Bearer (or X-API-Key) header. For tools that cannot send
+    headers, /mcp/<key> carries it in the address instead.
+    """
+    app = request.app
+    if not app[KEYS["automation"]]["enabled"]:
+        raise web.HTTPForbidden(
+            text="API access is turned off. Turn it on in LightPost under Settings > Automation."
+        )
+    header = request.headers.get("Authorization", "")
+    supplied = header[7:].strip() if header[:7].lower() == "bearer " else ""
+    supplied = supplied or request.headers.get("X-API-Key", "").strip()
+    if not supplied and request.path.startswith("/mcp/"):
+        supplied = request.path[5:].strip("/")
+    expected = app[KEYS["config"]].api_key
+    if (
+        not supplied
+        or not expected
+        or not hmac.compare_digest(supplied.encode(), expected.encode())
+    ):
+        raise web.HTTPUnauthorized(text="Missing or invalid API key.")
+
+
 @web.middleware
 async def guard(request, handler):
     config = request.app[KEYS["config"]]
     try:
-        if request.path.startswith("/api/"):
-            hostname = urlsplit("http://" + request.host).hostname
-            if not config.password and hostname not in ("localhost", "127.0.0.1", "::1"):
-                raise web.HTTPForbidden(text="Use a loopback hostname for this local workspace.")
+        local = urlsplit("http://" + request.host).hostname in ("localhost", "127.0.0.1", "::1")
+        automation = request.path == "/mcp" or request.path.startswith(("/mcp/", "/api/v1/"))
+        if not local and not config.password and not automation:
+            # Reached through a public address (a tunnel or proxy) with no dashboard password:
+            # only the key-protected API and MCP endpoints are available, nothing else.
+            raise web.HTTPForbidden(
+                text="The dashboard is not available on public addresses. Open LightPost on the "
+                "computer it runs on, or set ADMIN_PASSWORD."
+            )
+        if automation:
+            # A bearer key is never sent by a browser on its own, so the loopback-hostname and
+            # cross-site checks below are not needed here.
+            authorize_api(request)
+        elif request.path.startswith("/api/"):
             origin = request.headers.get("Origin")
             if (
                 request.method not in ("GET", "HEAD")
@@ -322,13 +359,18 @@ async def disconnect(request):
     return web.json_response({"ok": True})
 
 
-async def save_post(request):
-    data = await read_json(request)
-    store, jobs = request.app[KEYS["store"]], request.app[KEYS["jobs"]]
+async def write_post(app, data):
+    """Create, update, schedule or publish a post. Shared by the UI, REST API and MCP."""
+    store, jobs = app[KEYS["store"]], app[KEYS["jobs"]]
     async with jobs.post_lock:
         old = await store.get("posts", data.get("id", ""))
         if data.get("id") and not old:
             raise ValueError("Post not found.")
+        key = data.get("idempotencyKey")
+        if key is not None and (not isinstance(key, str) or not 0 < len(key) <= 200):
+            raise ValueError("idempotencyKey must be a string of 1 to 200 characters.")
+        if key and not old and (replay := await store.post_with_key(key)):
+            return replay, 200
         if old and old["status"] not in ("draft", "scheduled", "blocked"):
             raise ValueError("Duplicate this post to change it, or retry its failed destinations.")
         text = data.get("text", "")
@@ -387,6 +429,8 @@ async def save_post(request):
             "xAllowLinks": data.get("xAllowLinks") is True,
             "contentOptions": options,
         }
+        if key := (old or {}).get("idempotencyKey") or key:
+            post["idempotencyKey"] = key
         # Drafts can exceed platform limits; deliveries cannot.
         if status != "draft":
             x_accounts = [await store.get("accounts", id) for id in ids]
@@ -402,14 +446,18 @@ async def save_post(request):
             for id in media_ids:
                 await jobs.image(id)
         await store.put("posts", post)
-    return web.json_response(post, status=202 if status == "now" else 201)
+    return post, 202 if status == "now" else 201
 
 
-async def retry(request):
-    data = await read_json(request)
-    store, jobs = request.app[KEYS["store"]], request.app[KEYS["jobs"]]
+async def save_post(request):
+    post, status = await write_post(request.app, await read_json(request))
+    return web.json_response(post, status=status)
+
+
+async def retry_post(app, id, data):
+    store, jobs = app[KEYS["store"]], app[KEYS["jobs"]]
     async with jobs.post_lock:
-        post = await store.get("posts", request.match_info["id"])
+        post = await store.get("posts", id)
         if not post or post["status"] not in ("failed", "partial", "needs_review", "cancelled"):
             raise ValueError("This post does not have failed deliveries to retry.")
         if post["id"] in jobs.active:
@@ -431,13 +479,20 @@ async def retry(request):
         post.pop("cancelRequested", None)
         post.pop("message", None)
         await store.put("posts", post)
-    return web.json_response(post, status=202)
+    return post
 
 
-async def cancel(request):
-    store, jobs = request.app[KEYS["store"]], request.app[KEYS["jobs"]]
+async def retry(request):
+    data = await read_json(request)
+    return web.json_response(
+        await retry_post(request.app, request.match_info["id"], data), status=202
+    )
+
+
+async def cancel_post(app, id):
+    store, jobs = app[KEYS["store"]], app[KEYS["jobs"]]
     async with jobs.post_lock, jobs.result_lock:
-        post = await store.get("posts", request.match_info["id"])
+        post = await store.get("posts", id)
         if not post or post["status"] not in ("scheduled", "queued", "publishing", "processing"):
             raise ValueError("Only scheduled or active posting can be cancelled.")
         if post["status"] in ("scheduled", "queued"):
@@ -470,16 +525,24 @@ async def cancel(request):
                     }
                 )
         await store.put("posts", post)
-    return web.json_response(post)
+    return post
+
+
+async def cancel(request):
+    return web.json_response(await cancel_post(request.app, request.match_info["id"]))
+
+
+async def remove_post(app, id):
+    store, jobs = app[KEYS["store"]], app[KEYS["jobs"]]
+    async with jobs.post_lock:
+        post = await store.get("posts", id)
+        if post and post["status"] in ("queued", "publishing", "scheduled", "processing"):
+            raise ValueError("Cancel the schedule or wait for delivery before deleting.")
+        await store.remove("posts", id)
 
 
 async def delete_post(request):
-    store, jobs = request.app[KEYS["store"]], request.app[KEYS["jobs"]]
-    async with jobs.post_lock:
-        post = await store.get("posts", request.match_info["id"])
-        if post and post["status"] in ("queued", "publishing", "scheduled", "processing"):
-            raise ValueError("Cancel the schedule or wait for delivery before deleting.")
-        await store.remove("posts", request.match_info["id"])
+    await remove_post(request.app, request.match_info["id"])
     return web.json_response({"ok": True})
 
 
@@ -554,34 +617,40 @@ async def media_file(request):
     )
 
 
-async def media_alt(request):
-    data = await read_json(request)
-    media = await request.app[KEYS["store"]].get("media", request.match_info["id"])
+async def set_media_alt(app, id, alt):
+    media = await app[KEYS["store"]].get("media", id)
     if not media:
         raise web.HTTPNotFound(text="Image not found.")
-    alt = data.get("alt", "")
     if not isinstance(alt, str) or len(alt) > 1000:
         raise ValueError("Alt text must be 1,000 characters or fewer.")
     # Avoid changing an attachment already queued, sent, or currently sending.
-    async with request.app[KEYS["jobs"]].post_lock:
+    async with app[KEYS["jobs"]].post_lock:
         if any(
             media["id"] in p.get("mediaIds", []) and p["status"] != "draft"
-            for p in await request.app[KEYS["store"]].all("posts")
+            for p in await app[KEYS["store"]].all("posts")
         ):
             raise ValueError(
                 "This image belongs to a saved delivery. Upload another copy to change its alt text."
             )
-        await request.app[KEYS["store"]].put("media", {**media, "alt": alt})
+        await app[KEYS["store"]].put("media", {**media, "alt": alt})
+
+
+async def media_alt(request):
+    data = await read_json(request)
+    await set_media_alt(request.app, request.match_info["id"], data.get("alt", ""))
     return web.json_response({"ok": True})
 
 
-async def delete_media(request):
-    id = request.match_info["id"]
-    async with request.app[KEYS["jobs"]].post_lock:
-        if any(id in p.get("mediaIds", []) for p in await request.app[KEYS["store"]].all("posts")):
+async def remove_media(app, id):
+    async with app[KEYS["jobs"]].post_lock:
+        if any(id in p.get("mediaIds", []) for p in await app[KEYS["store"]].all("posts")):
             raise ValueError("Remove this image from saved posts first.")
-        await request.app[KEYS["store"]].remove("media", id)
-        (request.app[KEYS["jobs"]].media_dir / (id + ".bin")).unlink(missing_ok=True)
+        await app[KEYS["store"]].remove("media", id)
+        (app[KEYS["jobs"]].media_dir / (id + ".bin")).unlink(missing_ok=True)
+
+
+async def delete_media(request):
+    await remove_media(request.app, request.match_info["id"])
     return web.json_response({"ok": True})
 
 
@@ -619,6 +688,53 @@ async def export(request):
     )
 
 
+async def automation_info(request):
+    app = request.app
+    automation = app[KEYS["automation"]]
+    return web.json_response(
+        {
+            "enabled": automation["enabled"],
+            "locked": automation["locked"],
+            "source": automation["source"],
+            "envIgnored": automation["envIgnored"],
+            "key": app[KEYS["config"]].api_key,
+        }
+    )
+
+
+async def automation_update(request):
+    data = await read_json(request)
+    app = request.app
+    automation = app[KEYS["automation"]]
+    if automation["locked"]:
+        raise ValueError("API access is switched off by API_ENABLED=false in .env.")
+    if not isinstance(data.get("enabled"), bool):
+        raise ValueError("Choose on or off.")
+    await app[KEYS["store"]].put(
+        "settings",
+        {"id": "automation", "enabled": data["enabled"], "managed": automation["envIgnored"]},
+    )
+    automation["enabled"] = data["enabled"]
+    return await automation_info(request)
+
+
+async def automation_regenerate(request):
+    app = request.app
+    automation = app[KEYS["automation"]]
+    if automation["source"] != "file":
+        # The key came from API_KEY in .env. LightPost cannot rewrite that file, so from now on
+        # it manages its own key (in data/) and ignores the API_KEY line, now and after restarts.
+        store = app[KEYS["store"]]
+        record = await store.get("settings", "automation") or {"id": "automation"}
+        await store.put("settings", {**record, "id": "automation", "managed": True})
+        automation.update({"source": "file", "envIgnored": True})
+    # The old key stops working as soon as the new one is saved.
+    app[KEYS["config"]].api_key = await asyncio.to_thread(
+        save_api_key, automation["directory"], new_api_key()
+    )
+    return await automation_info(request)
+
+
 async def static(request):
     root = Path(request.app[KEYS["config"]].web_root).resolve()
     filename = request.match_info.get("path", "")
@@ -645,8 +761,27 @@ async def lifecycle(app):
         media_dir = directory / "media"
         media_dir.mkdir(parents=True, exist_ok=True)
         jobs = Scheduler(store, providers, media_dir, config.interval)
+        # API key: API_KEY in .env wins; otherwise LightPost creates one and keeps it in data/.
+        switch = await store.get("settings", "automation") or {}
+        ignored = bool(config.api_key) and switch.get("managed") is True
+        if ignored:  # The person chose "Regenerate" in Settings: LightPost manages the key now.
+            config.api_key = ""
+        source = "environment" if config.api_key else "file"
+        config.api_key = config.api_key or load_api_key(directory)
+        automation = {
+            "directory": directory,
+            "source": source,
+            "envIgnored": ignored or switch.get("managed") is True,
+            "locked": not config.api_enabled,
+            "enabled": config.api_enabled and switch.get("enabled", True) is not False,
+        }
+        from .remote import Remote  # Imported here: remote.py builds on this module.
+
+        remote = Remote(app, say=config.say)
         app.update(
             {
+                KEYS["remote"]: remote,
+                KEYS["automation"]: automation,
                 KEYS["store"]: store,
                 KEYS["vault"]: vault,
                 KEYS["providers"]: providers,
@@ -657,9 +792,11 @@ async def lifecycle(app):
             await jobs.start()
         else:
             await jobs.recover()
+        await remote.apply()
         try:
             yield
         finally:
+            await remote.stop()
             await jobs.close()
             if isinstance(transport, Transport):
                 await transport.close()
@@ -675,6 +812,11 @@ def create_app(config=None, transport=None):
     if transport:
         app[KEYS["test_transport"]] = transport
     app.cleanup_ctx.append(lifecycle)
+    from .api import routes as api_routes  # Imported here: api.py builds on this module.
+    from .remote import routes as remote_routes
+
+    app.add_routes(api_routes())
+    app.add_routes(remote_routes())
     app.add_routes(
         [
             web.get("/api/session", session),
@@ -696,6 +838,9 @@ def create_app(config=None, transport=None):
             web.delete("/api/media/{id}", delete_media),
             web.put("/api/settings", settings),
             web.get("/api/export", export),
+            web.get("/api/automation", automation_info),
+            web.put("/api/automation", automation_update),
+            web.post("/api/automation/regenerate", automation_regenerate),
             web.get("/{path:.*}", static),
         ]
     )

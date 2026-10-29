@@ -1,4 +1,5 @@
 import { guides } from './guides.js';
+import { toolGuides } from './tool-guides.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -13,6 +14,7 @@ const docsText = (text) =>
       /\[([^\]\n]+)\]\((https:\/\/[^)\s]+)\)/g,
       '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
     )
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
     .replace(/\n/g, '<br>')
@@ -399,10 +401,23 @@ function renderAccounts() {
     `<div class="page-header"><div><h1>Accounts</h1><p>Connect your own accounts. Add more than one per platform.</p></div><button class="primary" data-action="connect">＋ Connect account</button></div>${state.accounts.length ? `<div class="account-grid">${state.accounts.map((a) => `<article class="panel account-card"><div class="account-card-top">${mark(a.platform)}<div class="account-info"><strong>${esc(a.name)}</strong><span>${esc(a.handle)}</span></div>${badge('connected')}</div><p>${esc(state.platforms.find((p) => p.id === a.platform)?.content || '')} · Credentials stored encrypted on your server.</p><div class="row-actions"><button class="small" data-reconnect="${esc(a.id)}">Reconnect</button><button class="quiet small danger" data-disconnect="${esc(a.id)}">Disconnect</button></div></article>`).join('')}</div>` : '<div class="panel empty"><h2>Bring your accounts together.</h2><p>Connect Discord webhooks, Bluesky, Mastodon, X (Twitter), Instagram, Threads, Telegram, LinkedIn or Facebook Pages. Each connection is verified before its credentials are stored.</p><button class="primary" data-action="connect">Connect your first account</button></div>'}`;
 }
 function renderDocs() {
+  const toolGuide = toolGuides.find((item) => item.id === location.hash.split('/')[1]);
+  if (toolGuide) {
+    $('#page').innerHTML =
+      `<a class="docs-back" href="#docs">← All guides</a><div class="page-header guide-header"><div><h1>${esc(toolGuide.name)}</h1><p>${docsText(toolGuide.summary)}</p></div><a class="button primary" href="#settings">Open Settings</a></div><article class="docs-article"><p>${docsText(toolGuide.intro)}</p>${toolGuide.steps
+        .map(
+          (step, index) =>
+            `<section class="docs-section docs-step" id="${toolGuide.id}-step-${index + 1}"><div><p><strong>Step ${index + 1}: ${esc(step.title)}.</strong> ${docsText(step.text)}</p>${step.code ? `<pre class="docs-code">${esc(step.code)}</pre>` : ''}${(step.images || []).map((image) => `<figure><img class="docs-screenshot" src="${esc(image.src)}" alt="${esc(image.alt)}" loading="lazy" />${image.caption ? `<figcaption>${docsText(image.caption)}</figcaption>` : ''}</figure>`).join('')}</div></section>`,
+        )
+        .join(
+          '',
+        )}${toolGuide.troubleshooting ? `<div class="note-box"><h3>If something goes wrong</h3><p>${docsText(toolGuide.troubleshooting)}</p></div>` : ''}</article>`;
+    return;
+  }
   const guide = guides.find((item) => item.id === location.hash.split('/')[1]);
   if (!guide) {
     $('#page').innerHTML =
-      `<div class="page-header"><div><h1>Setup Guide</h1><p>Connect your own accounts, one step at a time.</p></div></div><div class="docs-guides">${guides.map((item) => `<a class="panel docs-platform" href="#docs/${item.id}">${mark(item.id)}<span><strong>${esc(item.name)}</strong><small>${esc(item.account)}</small></span><span aria-hidden="true">→</span></a>`).join('')}</div><div class="note-box"><h3>Reliable scheduling</h3><p>Keep it powered on with its clock synchronized. A missed schedule runs after restart. Check delivery receipts before retrying. Back up your data directory and encryption key together.</p></div>`;
+      `<div class="page-header"><div><h1>Setup Guide</h1><p>Connect your own accounts, one step at a time.</p></div></div><div class="docs-guides">${guides.map((item) => `<a class="panel docs-platform" href="#docs/${item.id}">${mark(item.id)}<span><strong>${esc(item.name)}</strong><small>${esc(item.account)}</small></span><span aria-hidden="true">→</span></a>`).join('')}</div><h2 class="section-label">CONNECT YOUR TOOLS</h2><p class="small-text muted">Let Claude, n8n, scripts and bots post, schedule and edit through the API or MCP server.</p><div class="docs-guides">${toolGuides.map((item) => `<a class="panel docs-platform" href="#docs/${item.id}"><span class="docs-tool-mark" aria-hidden="true">⇄</span><span><strong>${esc(item.name)}</strong><small>${esc(item.summary)}</small></span><span aria-hidden="true">→</span></a>`).join('')}</div><div class="note-box"><h3>Reliable scheduling</h3><p>Keep it powered on with its clock synchronized. A missed schedule runs after restart. Check delivery receipts before retrying. Back up your data directory and encryption key together.</p></div>`;
     return;
   }
   $('#page').innerHTML =
@@ -423,7 +438,131 @@ function renderDocs() {
 
 function renderSettings() {
   $('#page').innerHTML =
-    `<div class="page-header"><div><h1>Settings</h1><p>A small workspace, on your own terms.</p></div></div><div class="settings-grid"><form class="panel panel-body" id="settings-form"><h2>Workspace</h2><div class="field"><label for="workspace-name">Name</label><input id="workspace-name" name="name" required maxlength="80" value="${esc(state.settings.name)}" /></div><div class="field"><span class="label">Your timezone</span><p>${regionLabel()}</p><p class="small-text muted">Schedule inputs and post times both use your browser’s timezone automatically.</p></div><p class="error" id="settings-error" role="alert"></p><button class="primary" type="submit">Save settings</button></form><div class="panel panel-body"><h2>Your server</h2><p>Async Python · SQLite · three concurrent delivery slots.<br>No cloud service, external database, or AI generation.</p><p>Pending schedules resume after a restart. Missed posts are sent when the server starts again. Uncertain deliveries require a check before retrying.</p><p>Account credentials are encrypted. Content exports omit credentials and image files. For a full backup, stop the server and copy the data directory and your encryption key together.</p><a class="button" href="/api/export" download>Export post history ↗</a></div></div><h2 class="section-label">IMAGE LIBRARY</h2><p class="small-text muted">Reuse uploaded images in future posts. Images not used by a saved post can be removed.</p><div class="account-grid">${state.media.map((m) => `<div class="panel panel-body library-item"><img class="library-thumbnail" src="/api/media/${encodeURIComponent(m.id)}" alt="${esc(m.alt || m.name)}" loading="lazy" /><span class="small-text">${esc(m.name)}</span><button class="small quiet danger" data-delete-media="${esc(m.id)}">Remove image</button></div>`).join('') || '<p class="small-text muted">No images uploaded.</p>'}</div>`;
+    `<div class="page-header"><div><h1>Settings</h1><p>A small workspace, on your own terms.</p></div></div><div class="settings-grid"><form class="panel panel-body" id="settings-form"><h2>Workspace</h2><div class="field"><label for="workspace-name">Name</label><input id="workspace-name" name="name" required maxlength="80" value="${esc(state.settings.name)}" /></div><div class="field"><span class="label">Your timezone</span><p>${regionLabel()}</p><p class="small-text muted">Schedule inputs and post times both use your browser’s timezone automatically.</p></div><p class="error" id="settings-error" role="alert"></p><button class="primary" type="submit">Save settings</button></form><div class="panel panel-body"><h2>Your server</h2><p>Async Python · SQLite · three concurrent delivery slots.<br>No cloud service, external database, or AI generation.</p><p>Pending schedules resume after a restart. Missed posts are sent when the server starts again. Uncertain deliveries require a check before retrying.</p><p>Account credentials are encrypted. Content exports omit credentials and image files. For a full backup, stop the server and copy the data directory and your encryption key together.</p><a class="button" href="/api/export" download>Export post history ↗</a></div></div><h2 class="section-label">AUTOMATION</h2><div class="panel panel-body" id="automation-panel"><p class="small-text muted">Loading…</p></div><div class="panel panel-body" id="remote-panel"><p class="small-text muted">Loading…</p></div><h2 class="section-label">IMAGE LIBRARY</h2><p class="small-text muted">Reuse uploaded images in future posts. Images not used by a saved post can be removed.</p><div class="account-grid">${state.media.map((m) => `<div class="panel panel-body library-item"><img class="library-thumbnail" src="/api/media/${encodeURIComponent(m.id)}" alt="${esc(m.alt || m.name)}" loading="lazy" /><span class="small-text">${esc(m.name)}</span><button class="small quiet danger" data-delete-media="${esc(m.id)}">Remove image</button></div>`).join('') || '<p class="small-text muted">No images uploaded.</p>'}</div>`;
+  loadAutomation();
+  loadRemote();
+}
+let automation = null;
+function automationSnippets(key) {
+  const origin = location.origin;
+  return {
+    claude: `claude mcp add --transport http lightpost ${origin}/mcp --header "Authorization: Bearer ${key}"`,
+    curl: `curl -X POST ${origin}/api/v1/posts \\\n  -H "Authorization: Bearer ${key}" -H "Content-Type: application/json" \\\n  -d '{"text": "Hello from my automation", "accounts": ["all"]}'`,
+  };
+}
+function automationRow(label, value, id, help, secret = false) {
+  return `<div class="field"><label for="${id}">${esc(label)}</label><div class="copy-row"><input id="${id}" type="${secret ? 'password' : 'text'}" readonly value="${esc(value)}" ${secret ? 'data-secret' : ''} autocomplete="off" /><button type="button" class="small" data-copy-target="${id}">Copy</button></div><p class="small-text muted">${help}</p></div>`;
+}
+function automationHtml(info) {
+  const origin = location.origin;
+  const example = automationSnippets('YOUR_API_KEY');
+  return `<h2>API and MCP access</h2><p class="small-text muted">Let scripts, n8n and AI assistants such as Claude post, schedule and edit for you. Anyone with this key can post to every connected account, so keep it private.</p><label class="automation-switch"><input type="checkbox" id="automation-enabled" ${info.enabled ? 'checked' : ''} ${info.locked ? 'disabled' : ''} /> Allow API and MCP access${info.locked ? ' (switched off by API_ENABLED=false in your .env file)' : ''}</label><div class="field"><label for="api-key">API key</label><div class="copy-row"><input id="api-key" type="password" readonly value="${esc(info.key)}" data-secret autocomplete="off" /><button type="button" class="small" data-action="toggle-secrets" aria-pressed="false">Show</button><button type="button" class="small" data-copy-target="api-key">Copy</button><button type="button" class="small quiet danger" data-action="regenerate-key">Regenerate</button></div><p class="small-text muted">${info.source === 'file' ? (info.envIgnored ? 'Managed here and saved in your data folder (api.key). The API_KEY line in your .env file is ignored, you can delete it.' : 'Created for you and saved in your data folder (api.key).') : 'Set by API_KEY in your .env file. Regenerate creates a new key that LightPost manages, and the .env value is then ignored.'}</p></div><h3>Connect a tool</h3><p class="small-text">Step-by-step guides: <a href="#docs/tool-claude">Claude on the web</a> · <a href="#docs/tool-mcp">Claude Code and MCP clients</a> · <a href="#docs/tool-rest">n8n, scripts and bots</a></p>${automationRow('MCP server', `${origin}/mcp`, 'mcp-url', 'Send the key in an Authorization: Bearer header. Works with Claude Code, n8n and most MCP clients.')}${automationRow('MCP connector address', `${origin}/mcp/${info.key}`, 'mcp-key-url', 'For tools that cannot send headers. The key is part of this address, so treat the whole address like a password.', true)}${automationRow('REST API', `${origin}/api/v1`, 'rest-url', 'Same header. The API description is at /api/v1/openapi.json.')}<details class="automation-examples"><summary>Copy-ready examples</summary><pre>${esc(example.claude)}</pre><button type="button" class="small" data-copy-snippet="claude">Copy Claude Code command</button><pre>${esc(example.curl)}</pre><button type="button" class="small" data-copy-snippet="curl">Copy curl example</button></details>`;
+}
+function renderAutomation() {
+  const panel = $('#automation-panel');
+  if (panel && automation) panel.innerHTML = automationHtml(automation);
+}
+async function loadAutomation() {
+  try {
+    automation = await api('/automation');
+    renderAutomation();
+  } catch (error) {
+    const panel = $('#automation-panel');
+    if (panel) panel.innerHTML = `<p class="error" role="alert">${esc(error.message)}</p>`;
+  }
+}
+let remote = null;
+let remoteTimer = null;
+const remoteModes = [
+  ['off', 'Off (default)', 'Only this computer can reach LightPost.'],
+  [
+    'ngrok',
+    'ngrok',
+    'Runs the ngrok program you installed, with your own account or ngrok configuration.',
+  ],
+  [
+    'custom',
+    'My own https address',
+    'Tailscale Funnel, a Cloudflare named tunnel, your own reverse proxy… You run it; LightPost shows the addresses to use.',
+  ],
+];
+function remoteStatusHtml(info) {
+  const labels = {
+    off: 'Not shared.',
+    starting: 'Starting…',
+    running:
+      info.mode === 'custom' ? 'Addresses ready. LightPost does not check your tunnel.' : 'Online.',
+    error: 'Problem.',
+  };
+  let html = `<p class="small-text ${info.status === 'error' ? 'error' : 'muted'}" role="status">${esc(labels[info.status] || info.status)}${info.message ? ' ' + esc(info.message) : ''}</p>`;
+  if (info.status === 'running' && info.url && automation) {
+    html +=
+      automationRow(
+        'Public MCP server',
+        `${info.url}/mcp`,
+        'remote-mcp',
+        'Send the key in an Authorization: Bearer header.',
+      ) +
+      automationRow(
+        'Public MCP connector address',
+        `${info.url}/mcp/${automation.key}`,
+        'remote-mcp-key',
+        'For tools that cannot send headers (Claude on the web, Grok bots). The key is part of this address, so treat it like a password.',
+        true,
+      ) +
+      automationRow(
+        'Public REST API',
+        `${info.url}/api/v1`,
+        'remote-rest',
+        'Same header as the MCP server.',
+      );
+  }
+  return html;
+}
+function remoteHtml(info) {
+  const modes = remoteModes
+    .map(
+      ([value, label, help]) =>
+        `<label class="remote-mode"><input type="radio" name="remote-mode" value="${value}" ${info.mode === value ? 'checked' : ''} ${info.locked ? 'disabled' : ''} /> <span><strong>${label}</strong><br /><span class="small-text muted">${help}</span></span></label>`,
+    )
+    .join('');
+  const locked = info.locked ? 'disabled' : '';
+  return `<h2>Reach it from the internet</h2><p class="small-text muted">Off by default: LightPost only listens on this computer. Tools hosted online, such as Claude on the web, Grok bots or cloud n8n, cannot reach localhost, so you can give LightPost a public address. Requests from outside need the API key, and the dashboard stays private. Whatever carries the traffic (Cloudflare, ngrok, your proxy) can see it. <a href="#docs/tool-internet">Which option should I choose?</a> · <a href="#docs/tool-claude">Connect Claude on the web</a></p>${info.locked ? '<p class="small-text muted">The public address is set by PUBLIC_URL in your .env file.</p>' : ''}<form id="remote-form">${modes}<div id="remote-ngrok" ${info.mode === 'ngrok' ? '' : 'hidden'}><p class="small-text muted">Everything below is optional. If ngrok is already set up on this computer, leave it all empty. Otherwise create a free account at ngrok.com, copy your authtoken, and optionally claim a static domain.</p><div class="field"><label for="remote-domain">Static domain</label><input id="remote-domain" name="domain" placeholder="your-name.ngrok-free.app" value="${esc(info.domain)}" autocomplete="off" /></div><div class="field"><label for="remote-token">Authtoken</label><input id="remote-token" name="token" type="password" placeholder="${info.tokenSaved ? 'Saved. Leave empty to keep it.' : 'Paste your authtoken'}" autocomplete="off" /><p class="small-text muted">Stored encrypted on this computer and never shown again.</p>${info.tokenSaved ? '<label class="automation-switch"><input type="checkbox" name="clearToken" /> Remove the saved token</label>' : ''}</div><div class="field"><label for="remote-config">ngrok configuration file</label><input id="remote-config" name="configPath" placeholder="/path/to/ngrok.yml" value="${esc(info.configPath)}" autocomplete="off" /></div></div><div id="remote-custom" ${info.mode === 'custom' ? '' : 'hidden'}><div class="field"><label for="remote-url">Your public https address</label><input id="remote-url" name="publicUrl" placeholder="https://lightpost.example.com" value="${esc(info.publicUrl)}" autocomplete="off" ${locked} /><p class="small-text muted">Point your tunnel or reverse proxy at http://127.0.0.1:${esc(location.port || '3000')} and enter its public address here. LightPost does not start or check it.</p></div></div>${info.locked ? '' : '<button class="primary" type="submit" data-action="save-remote">Save</button>'}</form><div id="remote-status">${remoteStatusHtml(info)}</div>`;
+}
+function renderRemote(full = true) {
+  const panel = $('#remote-panel');
+  if (!panel || !remote) return;
+  if (full || !$('#remote-form')) panel.innerHTML = remoteHtml(remote);
+  else $('#remote-status').innerHTML = remoteStatusHtml(remote);
+  clearTimeout(remoteTimer);
+  if (remote.status === 'starting') remoteTimer = setTimeout(pollRemote, 1500);
+}
+async function pollRemote() {
+  if (!$('#remote-panel')) return;
+  try {
+    remote = { ...remote, ...(await api('/remote')) };
+    renderRemote(false);
+  } catch {
+    /* ignore, next navigation reloads */
+  }
+}
+async function loadRemote() {
+  const panel = $('#remote-panel');
+  try {
+    remote = await api('/remote');
+    renderRemote();
+  } catch (error) {
+    if (panel) panel.innerHTML = `<p class="error" role="alert">${esc(error.message)}</p>`;
+  }
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Copied.');
+  } catch {
+    toast('Your browser blocked copying. Select the text and press Ctrl+C.');
+  }
 }
 function openDialog(title, html) {
   modal.innerHTML = `<div class="dialog-header"><h2 id="modal-title">${esc(title)}</h2><button type="button" data-action="close-modal" aria-label="Close dialog">×</button></div><div class="dialog-content">${html}</div>`;
@@ -653,6 +792,22 @@ document.addEventListener('input', (event) => {
 });
 document.addEventListener('change', async (event) => {
   if (event.target.id === 'platform') renderConnectFields();
+  if (event.target.name === 'remote-mode') {
+    $('#remote-ngrok').hidden = event.target.value !== 'ngrok';
+    $('#remote-custom').hidden = event.target.value !== 'custom';
+  }
+  if (event.target.id === 'automation-enabled') {
+    try {
+      automation = await api('/automation', {
+        method: 'PUT',
+        body: { enabled: event.target.checked },
+      });
+      toast(automation.enabled ? 'API and MCP access is on.' : 'API and MCP access is off.');
+    } catch (error) {
+      event.target.checked = !event.target.checked;
+      toast(error.message);
+    }
+  }
 });
 document.addEventListener('click', async (event) => {
   const button = event.target.closest('button');
@@ -671,6 +826,52 @@ document.addEventListener('click', async (event) => {
         region.setAttribute('aria-expanded', String(regionVisible));
         region.setAttribute('aria-label', regionVisible ? 'Hide region' : 'Show region');
       }
+      return;
+    }
+    if (data.action === 'toggle-secrets') {
+      const show = button.getAttribute('aria-pressed') !== 'true';
+      for (const input of $$('[data-secret]')) input.type = show ? 'text' : 'password';
+      button.setAttribute('aria-pressed', String(show));
+      button.textContent = show ? 'Hide' : 'Show';
+      return;
+    }
+    if (data.copyTarget) {
+      await copyText($(`#${data.copyTarget}`).value);
+      return;
+    }
+    if (data.copySnippet) {
+      await copyText(automationSnippets(automation.key)[data.copySnippet]);
+      return;
+    }
+    if (data.action === 'regenerate-key') {
+      if (
+        !confirm(
+          'Create a new key? Tools using the current key stop working until you give them the new one.' +
+            (automation.source === 'environment'
+              ? ' The API_KEY in your .env file will be ignored from now on.'
+              : ''),
+        )
+      )
+        return;
+      automation = await api('/automation/regenerate', { method: 'POST', body: {} });
+      renderAutomation();
+      toast('New API key created. Press Copy and update your tools.');
+      return;
+    }
+    if (data.action === 'save-remote') {
+      const form = $('#remote-form');
+      const mode = form.querySelector('[name="remote-mode"]:checked').value;
+      const body = { mode };
+      if (mode === 'ngrok') {
+        body.domain = form.domain.value;
+        body.configPath = form.configPath.value;
+        if (form.token.value) body.token = form.token.value;
+        if (form.clearToken?.checked) body.clearToken = true;
+      }
+      if (mode === 'custom') body.publicUrl = form.publicUrl.value;
+      remote = await api('/remote', { method: 'PUT', body });
+      renderRemote();
+      toast('Saved.');
       return;
     }
     if (data.page) {

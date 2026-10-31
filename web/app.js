@@ -35,6 +35,7 @@ const icon = (name) =>
 const brand =
   '<a class="brand" href="/" aria-label="LightPost home"><img src="/favicon.svg" alt="" />LightPost</a>';
 const platformLogos = new Set([
+  'youtube',
   'bluesky',
   'mastodon',
   'x',
@@ -72,6 +73,8 @@ function freshComposer() {
     text: '',
     accountIds: [],
     mediaIds: [],
+    videoId: null,
+    youtube: { title: '', visibility: '', madeForKids: false, syntheticMedia: false },
     alts: {},
     id: null,
     scheduledAt: '',
@@ -96,7 +99,11 @@ async function api(path, { method = 'GET', body } = {}) {
     renderLogin();
     throw Error('Your session ended. Sign in again.');
   }
-  if (!response.ok) throw Error(result.error || 'Request failed.');
+  if (!response.ok) {
+    const error = Error(result.error || 'Request failed.');
+    error.reconnectAccountIds = result.reconnectAccountIds;
+    throw error;
+  }
   return result;
 }
 function hasXLink(text) {
@@ -196,10 +203,11 @@ function renderShell() {
     )
     .join(
       '',
-    )}</nav><div class="side-bottom"><p><span class="status-dot"></span>Local workspace<br>Python async · SQLite</p><a href="/api/export" download>Export post history ↗</a></div></aside><main class="app-main"><header class="topbar"><strong>${esc(state.settings.name)}</strong><div class="topbar-right">${themeToggle()}<span class="region-toggle">Region: ${regionLabel()}</span>${state.authEnabled ? '<button class="quiet small" data-action="logout">Sign out</button>' : `<span><span class="status-dot"></span>On your server</span>`}</div></header><div class="page" id="page"></div></main>`;
+    )}</nav><div class="side-bottom"><p><span class="status-dot"></span>Local workspace<br>Python async · SQLite</p><a href="/api/export" download>Export post history ↗</a></div></aside><main class="app-main"><header class="topbar"><strong>${esc(state.settings.name)}</strong><div class="topbar-right">${themeToggle()}<span class="region-toggle">Region: ${regionLabel()}</span>${state.authEnabled ? '<button class="quiet small" data-action="logout">Sign out</button>' : `<span><span class="status-dot"></span>On your server</span>`}</div></header><div id="connection-notice" class="connection-notice" hidden></div><div class="page" id="page"></div></main>`;
   renderPage();
 }
 function renderPage() {
+  renderConnectionNotice();
   const navCount = $('.nav .count');
   if (navCount) navCount.textContent = `(${state.total})`;
   $$('.nav button').forEach((button) => {
@@ -212,6 +220,29 @@ function renderPage() {
   if (page === 'settings') renderSettings();
   if (page === 'docs') renderDocs();
 }
+function renderConnectionNotice() {
+  const notice = $('#connection-notice');
+  if (!notice || !state) return;
+  const affected = state.accounts.filter(
+    (account) => account.connectionStatus === 'reconnect_required',
+  );
+  notice.hidden = !affected.length;
+  notice.innerHTML = affected.length
+    ? `<div class="notice warning" role="status">YouTube needs reconnecting for ${affected.map((account) => esc(account.handle)).join(', ')}. Posting cannot continue for these accounts until you reconnect. <button type="button" class="small" data-page="accounts">Go to Accounts</button></div>`
+    : '';
+}
+function showYoutubeReconnect(identities) {
+  for (const identity of identities) {
+    const account = state.accounts.find((item) => item.id === identity);
+    if (account) account.connectionStatus = 'reconnect_required';
+  }
+  renderConnectionNotice();
+  const composing = page === 'compose' && $('#post-form');
+  openDialog(
+    'Reconnect YouTube',
+    `<p>Your YouTube authorization expired or was revoked. Reconnect with Google before scheduling or posting.</p><p class="small-text muted">${composing ? 'Your post has not been sent or scheduled. The button below saves it as a draft before opening the connection form.' : 'After reconnecting, return to the post and retry its unsuccessful delivery.'}</p><div class="actions"><button type="button" data-action="close-modal">Keep editing</button>${identities.map((identity) => `<button type="button" class="primary" data-youtube-reconnect="${esc(identity)}">${composing ? 'Save draft & reconnect' : 'Reconnect'} ${esc(state.accounts.find((account) => account.id === identity)?.handle || 'YouTube')}</button>`).join('')}</div>`,
+  );
+}
 function requiredContent(platform, kind) {
   return (platform === 'instagram' && kind === 'image') || (platform === 'x' && kind === 'text');
 }
@@ -223,9 +254,13 @@ function instagramLast(items, platform = (item) => item.platform) {
 function renderCompose() {
   const available = instagramLast(state.accounts);
   $('#page').innerHTML =
-    `<div class="page-header"><div><h1>${composer.id ? 'Edit post' : 'New post'}</h1><p>Write once. Choose where it goes.</p></div><span class="eyebrow">Your publishing desk</span></div><div class="compose-grid"><form id="post-form" class="panel"><div class="panel-heading">Post details<span class="muted small-text">${composer.id ? 'Editing saved post' : 'Not yet saved'}</span></div><div class="panel-body"><div class="destination-heading"><span class="label">Publish to</span>${available.length ? '<label class="select-all-accounts"><input type="checkbox" id="select-all-accounts" /> Select all</label>' : ''}</div><div class="account-options">${available.length ? available.map((a) => `<div class="account-option"><label class="account-select"><input type="checkbox" name="account" value="${esc(a.id)}" ${composer.accountIds.includes(a.id) ? 'checked' : ''} />${mark(a.platform)}<span class="account-info"><strong>${esc(a.name)}</strong><span>${esc(a.handle)}</span></span></label><div class="content-options">${['text', 'image'].map((kind) => `<label><span${requiredContent(a.platform, kind) ? ' class="required-toggle" tabindex="0"' : ''}><input type="checkbox" role="switch" data-content-account="${esc(a.id)}" data-content-kind="${kind}" aria-label="${esc(a.handle)}: ${kind}" ${requiredContent(a.platform, kind) || composer.contentOptions[a.id]?.[kind] !== false ? 'checked' : ''} ${requiredContent(a.platform, kind) ? 'disabled aria-description="Required for this platform"' : ''} />${requiredContent(a.platform, kind) ? '<span class="required-toggle-tooltip" role="tooltip">Required for this platform</span>' : ''}</span>${kind === 'text' ? 'Text' : 'Image'}</label>`).join('')}</div></div>`).join('') : '<div class="notice">Connect an account to get started. <button type="button" class="small" data-action="connect">Connect account</button></div>'}</div><label class="label" for="post-text">Your post</label><textarea id="post-text" name="text" placeholder="What would you like to share?" maxlength="10000">${esc(composer.text)}</textarea><div class="compose-tools"><div><button type="button" class="small image-url-button" data-action="source-image">Add Image</button><button type="button" class="small saved-library-button" data-action="library">Saved Library</button></div><span class="counter" id="counter"></span></div><div class="char-hints" id="char-hints"></div><div id="attachments" class="attachments"></div><div id="destination-notice"></div><div id="x-options" hidden><label class="x-link-option"><input type="checkbox" id="x-allow-links" ${composer.xAllowLinks ? 'checked' : ''} /> Allow links — X (Twitter) charges $0.20 per post per X (Twitter) account.</label><p class="small-text muted" id="x-cost-estimate"></p></div><div class="schedule-box"><div class="field"><label for="scheduled-at">Schedule date & time</label><input type="datetime-local" id="scheduled-at" value="${esc(composer.scheduledAt || localInput())}" required /></div></div><p class="error" id="post-error" role="alert"></p><div class="actions"><button type="submit" value="draft">Save draft</button><button type="submit" value="scheduled">Schedule</button><button type="submit" class="primary" value="now">Publish now ↗</button></div><p class="form-footnote">Publish now sends to your selected accounts.<br>Images: up to 1 MB each. X (Twitter): up to four images. Instagram: one public JPEG. Threads: text or one public JPEG. Other channels: up to four imported images.</p></div></form><aside class="preview-column"><div class="preview-topline"><span class="eyebrow">Post preview</span><span class="muted small-text">Content preview</span></div><div class="panel preview-card"><div class="preview-user"><span class="avatar" id="preview-avatar">${esc(state.settings.name.slice(0, 1).toUpperCase())}</span><div><strong id="preview-name">${esc(state.settings.name)}</strong><span id="preview-destination">Select your accounts</span></div></div><div class="preview-text" id="preview-text"></div><div class="preview-images" id="preview-images"></div><div class="preview-meta"><span>♡ &nbsp; ◯ &nbsp; ↗</span><span>Just now</span></div></div><p class="preview-note">The final appearance depends on the platform. Your content is sent as written, with no AI edits.</p><div class="note-box"><h3>One post, several destinations.</h3><p>You can select multiple accounts on the same platform. Each delivery gets its own result, so a failed destination does not hide successful ones.</p></div></aside></div>`;
+    `<div class="page-header"><div><h1>${composer.id ? 'Edit post' : 'New post'}</h1><p>Write once. Choose where it goes.</p></div><span class="eyebrow">Your publishing desk</span></div><div class="compose-grid"><form id="post-form" class="panel"><div class="panel-heading">Post details<span class="muted small-text">${composer.id ? 'Editing saved post' : 'Not yet saved'}</span></div><div class="panel-body"><div class="destination-heading"><span class="label">Publish to</span>${available.length ? '<label class="select-all-accounts"><input type="checkbox" id="select-all-accounts" /> Select all</label>' : ''}</div><div class="account-options">${available.length ? available.map((a) => `<div class="account-option"><label class="account-select"><input type="checkbox" name="account" value="${esc(a.id)}" ${composer.accountIds.includes(a.id) ? 'checked' : ''} />${mark(a.platform)}<span class="account-info"><strong>${esc(a.name)}</strong><span>${esc(a.handle)}</span></span></label><div class="content-options">${(a.platform === 'youtube' ? [] : ['text', 'image']).map((kind) => `<label><span${requiredContent(a.platform, kind) ? ' class="required-toggle" tabindex="0"' : ''}><input type="checkbox" role="switch" data-content-account="${esc(a.id)}" data-content-kind="${kind}" aria-label="${esc(a.handle)}: ${kind}" ${requiredContent(a.platform, kind) || composer.contentOptions[a.id]?.[kind] !== false ? 'checked' : ''} ${requiredContent(a.platform, kind) ? 'disabled aria-description="Required for this platform"' : ''} />${requiredContent(a.platform, kind) ? '<span class="required-toggle-tooltip" role="tooltip">Required for this platform</span>' : ''}</span>${kind === 'text' ? 'Text' : 'Image'}</label>`).join('')}</div></div>`).join('') : '<div class="notice">Connect an account to get started. <button type="button" class="small" data-action="connect">Connect account</button></div>'}</div><div id="youtube-fields" hidden>${youtubeFields()}</div><label class="label" for="post-text">Your post / YouTube description</label><textarea id="post-text" name="text" placeholder="What would you like to share?" maxlength="10000">${esc(composer.text)}</textarea><div class="compose-tools"><div><button type="button" class="small image-url-button" data-action="source-image">Add Image</button><button type="button" class="small saved-library-button" data-action="library">Saved Library</button></div><span class="counter" id="counter"></span></div><div class="char-hints" id="char-hints"></div><div id="attachments" class="attachments"></div><div id="destination-notice"></div><div id="x-options" hidden><label class="x-link-option"><input type="checkbox" id="x-allow-links" ${composer.xAllowLinks ? 'checked' : ''} /> Allow links — X (Twitter) charges $0.20 per post per X (Twitter) account.</label><p class="small-text muted" id="x-cost-estimate"></p></div><div class="schedule-box"><div class="field"><label for="scheduled-at">Schedule date & time</label><input type="datetime-local" id="scheduled-at" value="${esc(composer.scheduledAt || localInput())}" required /></div></div><p class="error" id="post-error" role="alert"></p><div class="actions"><button type="submit" value="draft">Save draft</button><button type="submit" value="scheduled">Schedule</button><button type="submit" class="primary" value="now">Publish now ↗</button></div><p class="form-footnote">Publish now sends to your selected accounts.<br>YouTube: one MP4 up to 250 MB; video posts use YouTube accounts only. Scheduled uploads start at the selected time, then YouTube processes the video.<br>Images: up to 1 MB each. X (Twitter): up to four images. Instagram: one public JPEG. Threads: text or one public JPEG. Other channels: up to four imported images.</p></div></form><aside class="preview-column"><div class="preview-topline"><span class="eyebrow">Post preview</span><span class="muted small-text">Content preview</span></div><div class="panel preview-card"><div class="preview-user"><span class="avatar" id="preview-avatar">${esc(state.settings.name.slice(0, 1).toUpperCase())}</span><div><strong id="preview-name">${esc(state.settings.name)}</strong><span id="preview-destination">Select your accounts</span></div></div><h3 id="preview-video-title" hidden></h3><video id="preview-video" controls preload="metadata" aria-label="Selected YouTube video" hidden></video><div class="preview-text" id="preview-text"></div><div class="preview-images" id="preview-images"></div><div class="preview-meta"><span>♡ &nbsp; ◯ &nbsp; ↗</span><span>Just now</span></div></div><p class="preview-note">The final appearance depends on the platform. Your content is sent as written, with no AI edits.</p><div class="note-box"><h3>One post, several destinations.</h3><p>You can select multiple accounts on the same platform. Each delivery gets its own result, so a failed destination does not hide successful ones.</p></div></aside></div>`;
   renderAttachments();
   updatePreview();
+}
+function youtubeFields() {
+  const details = { ...freshComposer().youtube, ...composer.youtube };
+  return `<h2>YouTube video</h2><div class="field"><label for="youtube-title">Video title <span class="required-indicator" aria-hidden="true">*</span></label><input id="youtube-title" maxlength="100" value="${esc(details.title)}" /></div><div class="field"><label for="youtube-video-library">Saved video</label><select id="youtube-video-library"><option value="">Choose a video</option>${(state.videos || []).map((video) => `<option value="${esc(video.id)}" ${composer.videoId === video.id ? 'selected' : ''}>${esc(video.name)} · ${(video.size / 1024 / 1024).toFixed(1)} MB</option>`).join('')}</select></div><div class="field"><label for="youtube-file">Or upload an MP4 (up to 250 MB)</label><div class="video-file-picker"><button type="button" data-action="choose-video">Choose video</button><span id="youtube-file-name" class="small-text muted" role="status">${esc((state.videos || []).find((video) => video.id === composer.videoId)?.name || 'No video selected')}</span><input id="youtube-file" type="file" accept="video/mp4,.mp4" hidden /></div><p id="youtube-upload-status" class="small-text muted" role="status"></p></div><div class="field"><label for="youtube-visibility">Visibility <span class="required-indicator" aria-hidden="true">*</span></label><select id="youtube-visibility"><option value="">Choose visibility</option>${['private', 'unlisted', 'public'].map((value) => `<option value="${value}" ${details.visibility === value ? 'selected' : ''}>${value[0].toUpperCase() + value.slice(1)}</option>`).join('')}</select></div><div class="field"><label for="youtube-audience">Is this video made for kids?</label><select id="youtube-audience"><option value="">Choose an audience</option><option value="yes" ${details.madeForKids === true ? 'selected' : ''}>Yes, made for kids</option><option value="no" ${details.madeForKids !== true ? 'selected' : ''}>No, not made for kids</option></select></div><div class="field"><label for="youtube-synthetic">Does it contain realistic altered or synthetic content requiring disclosure?</label><select id="youtube-synthetic"><option value="">Choose a disclosure</option><option value="yes" ${details.syntheticMedia === true ? 'selected' : ''}>Yes</option><option value="no" ${details.syntheticMedia !== true ? 'selected' : ''}>No</option></select><p class="small-text muted"><a href="https://support.google.com/youtube/answer/14328491" target="_blank" rel="noopener noreferrer">YouTube disclosure guidance ↗</a></p></div>`;
 }
 function readComposer() {
   if (!$('#post-form')) return;
@@ -233,6 +268,17 @@ function readComposer() {
   composer.accountIds = $$('input[name="account"]:checked').map((input) => input.value);
   composer.scheduledAt = $('#scheduled-at').value;
   composer.xAllowLinks = $('#x-allow-links').checked;
+  if ($('#youtube-title')) {
+    composer.youtube = {
+      title: $('#youtube-title').value,
+      visibility: $('#youtube-visibility').value,
+      madeForKids:
+        $('#youtube-audience').value === '' ? null : $('#youtube-audience').value === 'yes',
+      syntheticMedia:
+        $('#youtube-synthetic').value === '' ? null : $('#youtube-synthetic').value === 'yes',
+    };
+    composer.videoId = $('#youtube-video-library').value || null;
+  }
   for (const input of $$('[data-content-account]')) {
     const options = (composer.contentOptions[input.dataset.contentAccount] ||= {});
     options[input.dataset.contentKind] = input.checked;
@@ -271,13 +317,47 @@ function updatePreview() {
     selectAll.indeterminate = selectedCount > 0 && selectedCount < accounts.length;
   }
   const selected = instagramLast(state.accounts.filter((a) => composer.accountIds.includes(a.id)));
+  const youtubeSelected = selected.some((a) => a.platform === 'youtube');
+  if ($('#youtube-fields')) {
+    $('#youtube-fields').hidden = !youtubeSelected;
+    for (const id of [
+      'youtube-title',
+      'youtube-visibility',
+      'youtube-audience',
+      'youtube-synthetic',
+    ])
+      $(`#${id}`).required = youtubeSelected;
+    $('[data-action="source-image"]').hidden = youtubeSelected;
+    $('[data-action="library"]').hidden = youtubeSelected;
+    const filename = (state.videos || []).find((video) => video.id === composer.videoId)?.name;
+    $('#youtube-file-name').textContent = filename || 'No video selected';
+  }
+  const previewVideo = $('#preview-video');
+  if (previewVideo) {
+    const videoId = youtubeSelected ? composer.videoId || '' : '';
+    previewVideo.dataset ||= {};
+    // Keep the player and its source intact while typing so playback does not restart.
+    if ((previewVideo.dataset.videoId || '') !== videoId) {
+      previewVideo.dataset.videoId = videoId;
+      if (videoId) previewVideo.src = `/api/videos/${encodeURIComponent(videoId)}`;
+      else {
+        previewVideo.pause();
+        previewVideo.removeAttribute('src');
+        previewVideo.load();
+      }
+    }
+    previewVideo.hidden = !videoId;
+    const previewTitle = $('#preview-video-title');
+    previewTitle.textContent = composer.youtube?.title || '';
+    previewTitle.hidden = !youtubeSelected || !composer.youtube?.title;
+  }
   $('#preview-text').textContent = composer.text || 'Your words will appear here.';
   $('#preview-text').classList.toggle('preview-placeholder', !composer.text);
   $('#counter').textContent = `${[...composer.text].length} characters`;
   const account = selected[0];
   const previewOptions = composer.contentOptions[account?.id] || {};
   $('#preview-text').hidden = previewOptions.text === false;
-  $('#preview-images').hidden = previewOptions.image === false;
+  $('#preview-images').hidden = youtubeSelected || previewOptions.image === false;
   $('#preview-name').textContent = account?.name || state.settings.name;
   $('#preview-avatar').innerHTML = account
     ? mark(account.platform)
@@ -311,10 +391,12 @@ function updatePreview() {
       composer.contentOptions[a.id]?.image !== false,
   );
 
-  $('[data-action="library"]').hidden = false;
-  $('#destination-notice').innerHTML = needsPublic
-    ? '<div class="notice">Instagram needs one public JPEG. Threads can post text, or one public JPEG. Choose a URL-imported image from Saved Library, or use Add Image.</div>'
-    : '';
+  $('[data-action="library"]').hidden = youtubeSelected;
+  $('#destination-notice').innerHTML = youtubeSelected
+    ? '<div class="notice">YouTube needs a video, title, visibility, audience and disclosure choices. Select YouTube accounts only for this post. Uploads marked Public are visible to everyone once YouTube finishes processing.</div>'
+    : needsPublic
+      ? '<div class="notice">Instagram needs one public JPEG. Threads can post text, or one public JPEG. Choose a URL-imported image from Saved Library, or use Add Image.</div>'
+      : '';
 }
 function renderAttachments() {
   $('#attachments').innerHTML = composer.mediaIds
@@ -357,7 +439,7 @@ function renderPostList() {
             Object.values(Object.fromEntries((post.results || []).map((r) => [r.accountId, r]))),
             (result) => state.accounts.find((account) => account.id === result.accountId)?.platform,
           );
-          return `<article class="post-row"><div class="post-row-top"><span class="post-time">${dateText(post.scheduledAt || post.finishedAt || post.createdAt)}</span>${post.status === 'published' ? '<span class="post-published">PUBLISHED</span>' : badge(post.status)}</div><div class="post-content-card">${(post.mediaIds || []).length ? `<div class="post-thumbnail"><img src="/api/media/${encodeURIComponent(post.mediaIds[0])}" alt="${esc(post.alts?.[post.mediaIds[0]] || state.media.find((m) => m.id === post.mediaIds[0])?.alt || 'Attached image')}" loading="lazy" />${post.mediaIds.length > 1 ? `<span class="post-image-count" aria-label="${post.mediaIds.length} attached images">+${post.mediaIds.length - 1}</span>` : ''}</div>` : ''}${post.text ? `<p class="post-text">${esc(post.text)}</p>` : ''}</div>${
+          return `<article class="post-row"><div class="post-row-top"><span class="post-time">${dateText(post.scheduledAt || post.finishedAt || post.createdAt)}</span>${post.status === 'published' ? '<span class="post-published">PUBLISHED</span>' : badge(post.status)}</div><div class="post-content-card">${(post.mediaIds || []).length ? `<div class="post-thumbnail"><img src="/api/media/${encodeURIComponent(post.mediaIds[0])}" alt="${esc(post.alts?.[post.mediaIds[0]] || state.media.find((m) => m.id === post.mediaIds[0])?.alt || 'Attached image')}" loading="lazy" />${post.mediaIds.length > 1 ? `<span class="post-image-count" aria-label="${post.mediaIds.length} attached images">+${post.mediaIds.length - 1}</span>` : ''}</div>` : ''}${post.videoId ? `<div class="post-video"><video controls preload="none" src="/api/videos/${encodeURIComponent(post.videoId)}" aria-label="${esc(post.youtube?.title || 'YouTube video')}"></video><strong>${esc(post.youtube?.title || 'YouTube video')}</strong><span class="small-text muted">${esc(post.youtube?.visibility || '')}</span></div>` : ''}${post.text ? `<p class="post-text">${esc(post.text)}</p>` : ''}</div>${
             !latest.length
               ? `<div class="post-accounts">${instagramLast(
                   post.accountIds,
@@ -396,7 +478,7 @@ function renderPostList() {
 }
 function renderAccounts() {
   $('#page').innerHTML =
-    `<div class="page-header"><div><h1>Accounts</h1><p>Connect your own accounts. Add more than one per platform.</p></div><button class="primary" data-action="connect">＋ Connect account</button></div>${state.accounts.length ? `<div class="account-grid">${state.accounts.map((a) => `<article class="panel account-card"><div class="account-card-top">${mark(a.platform)}<div class="account-info"><strong>${esc(a.name)}</strong><span>${esc(a.handle)}</span></div>${badge('connected')}</div><p>${esc(state.platforms.find((p) => p.id === a.platform)?.content || '')} · Credentials stored encrypted on your server.</p><div class="row-actions"><button class="small" data-reconnect="${esc(a.id)}">Reconnect</button><button class="quiet small danger" data-disconnect="${esc(a.id)}">Disconnect</button></div></article>`).join('')}</div>` : '<div class="panel empty"><h2>Bring your accounts together.</h2><p>Connect Discord webhooks, Bluesky, Mastodon, X (Twitter), Instagram, Threads, Telegram, LinkedIn or Facebook Pages. Each connection is verified before its credentials are stored.</p><button class="primary" data-action="connect">Connect your first account</button></div>'}`;
+    `<div class="page-header"><div><h1>Accounts</h1><p>Connect your own accounts. Add more than one per platform.</p></div><button class="primary" data-action="connect">＋ Connect account</button></div>${state.accounts.length ? `<div class="account-grid">${state.accounts.map((a) => `<article class="panel account-card"><div class="account-card-top">${mark(a.platform)}<div class="account-info"><strong>${esc(a.name)}</strong><span>${esc(a.handle)}</span></div>${a.connectionStatus === 'reconnect_required' ? '<span class="badge failed">Reconnect required</span>' : badge('connected')}</div><p>${esc(state.platforms.find((p) => p.id === a.platform)?.content || '')} · Credentials stored encrypted on your server.</p>${a.connectionStatus === 'reconnect_required' ? `<p class="warn" role="status">${esc(a.connectionMessage || 'Reconnect with Google before scheduling or posting.')}</p>` : ''}<div class="row-actions"><button class="small" data-reconnect="${esc(a.id)}">Reconnect</button><button class="quiet small danger" data-disconnect="${esc(a.id)}">Disconnect</button></div></article>`).join('')}</div>` : '<div class="panel empty"><h2>Bring your accounts together.</h2><p>Connect Discord webhooks, Bluesky, Mastodon, X (Twitter), Instagram, Threads, Telegram, LinkedIn or Facebook Pages. Each connection is verified before its credentials are stored.</p><button class="primary" data-action="connect">Connect your first account</button></div>'}`;
 }
 function renderDocs() {
   const guide = guides.find((item) => item.id === location.hash.split('/')[1]);
@@ -416,14 +498,19 @@ function renderDocs() {
     }${guide.steps
       .map((step, index) => {
         const item = typeof step === 'string' ? { title: guide.titles[index], text: step } : step;
-        return `<section class="docs-section docs-step" id="${guide.id}-step-${index + 1}"><div><p><strong>Step ${index + 1}:</strong> ${item.link ? `Navigate to <a href="${esc(item.link.url)}" target="_blank" rel="noopener noreferrer">${docsText(item.link.label)}</a> ` : ''}${docsText(item.text)}</p>${(item.images || []).map((image) => `<figure><img class="docs-screenshot" src="${esc(image.src)}" alt="${esc(image.alt)}" loading="lazy" />${image.caption ? `<figcaption>${docsText(image.caption)}</figcaption>` : ''}</figure>`).join('')}</div></section>`;
+        return `<section class="docs-section docs-step" id="${guide.id}-step-${index + 1}"><div><p><strong>Step ${index + 1}:</strong> ${item.link ? `Navigate to <a href="${esc(item.link.url)}" target="_blank" rel="noopener noreferrer">${docsText(item.link.label)}</a> ` : ''}${docsText(item.text)}</p>${item.bullets?.length ? `<ul>${item.bullets.map((text) => `<li>${docsText(text)}</li>`).join('')}</ul>` : ''}${(item.images || []).map((image) => `<figure><img class="docs-screenshot" src="${esc(image.src)}" alt="${esc(image.alt)}" loading="lazy" />${image.caption ? `<figcaption>${docsText(image.caption)}</figcaption>` : ''}</figure>`).join('')}</div></section>`;
       })
-      .join('')}</article>`;
+      .join(
+        '',
+      )}${guide.connectionNote ? `<aside class="docs-connection-note" aria-labelledby="connection-note-title"><h2 id="connection-note-title">${esc(guide.connectionNote.title)}</h2>${guide.connectionNote.paragraphs.map((text) => `<p>${docsText(text)}</p>`).join('')}</aside>` : ''}</article>`;
 }
 
 function renderSettings() {
   $('#page').innerHTML =
-    `<div class="page-header"><div><h1>Settings</h1><p>A small workspace, on your own terms.</p></div></div><div class="settings-grid"><form class="panel panel-body" id="settings-form"><h2>Workspace</h2><div class="field"><label for="workspace-name">Name</label><input id="workspace-name" name="name" required maxlength="80" value="${esc(state.settings.name)}" /></div><div class="field"><span class="label">Your timezone</span><p>${regionLabel()}</p><p class="small-text muted">Schedule inputs and post times both use your browser’s timezone automatically.</p></div><p class="error" id="settings-error" role="alert"></p><button class="primary" type="submit">Save settings</button></form><div class="panel panel-body"><h2>Your server</h2><p>Async Python · SQLite · three concurrent delivery slots.<br>No cloud service, external database, or AI generation.</p><p>Pending schedules resume after a restart. Missed posts are sent when the server starts again. Uncertain deliveries require a check before retrying.</p><p>Account credentials are encrypted. Content exports omit credentials and image files. For a full backup, stop the server and copy the data directory and your encryption key together.</p><a class="button" href="/api/export" download>Export post history ↗</a></div></div><h2 class="section-label">IMAGE LIBRARY</h2><p class="small-text muted">Reuse uploaded images in future posts. Images not used by a saved post can be removed.</p><div class="account-grid">${state.media.map((m) => `<div class="panel panel-body library-item"><img class="library-thumbnail" src="/api/media/${encodeURIComponent(m.id)}" alt="${esc(m.alt || m.name)}" loading="lazy" /><span class="small-text">${esc(m.name)}</span><button class="small quiet danger" data-delete-media="${esc(m.id)}">Remove image</button></div>`).join('') || '<p class="small-text muted">No images uploaded.</p>'}</div>`;
+    `<div class="page-header"><div><h1>Settings</h1><p>A small workspace, on your own terms.</p></div></div><div class="settings-grid"><form class="panel panel-body" id="settings-form"><h2>Workspace</h2><div class="field"><label for="workspace-name">Name</label><input id="workspace-name" name="name" required maxlength="80" value="${esc(state.settings.name)}" /></div><div class="field"><span class="label">Your timezone</span><p>${regionLabel()}</p><p class="small-text muted">Schedule inputs and post times both use your browser’s timezone automatically.</p></div><p class="error" id="settings-error" role="alert"></p><button class="primary" type="submit">Save settings</button></form><div class="panel panel-body"><h2>Your server</h2><p>Async Python · SQLite · three concurrent delivery slots.<br>No cloud service, external database, or AI generation.</p><p>Pending schedules resume after a restart. Missed posts are sent when the server starts again. Uncertain deliveries require a check before retrying.</p><p>Account credentials are encrypted. Content exports omit credentials and image files. For a full backup, stop the server and copy the data directory and your encryption key together.</p><a class="button" href="/api/export" download>Export post history ↗</a></div></div><h2 class="section-label">IMAGE LIBRARY</h2><p class="small-text muted">Reuse uploaded images in future posts. Images not used by a saved post can be removed.</p><div class="account-grid">${state.media.map((m) => `<div class="panel panel-body library-item"><img class="library-thumbnail" src="/api/media/${encodeURIComponent(m.id)}" alt="${esc(m.alt || m.name)}" loading="lazy" /><span class="small-text">${esc(m.name)}</span><button class="small quiet danger" data-delete-media="${esc(m.id)}">Remove image</button></div>`).join('') || '<p class="small-text muted">No images uploaded.</p>'}</div>${renderVideoLibrary()}`;
+}
+function renderVideoLibrary() {
+  return `<h2 class="section-label">VIDEO LIBRARY</h2><p class="small-text muted">MP4 videos for YouTube. Remove unused files to reclaim disk space.</p><div class="account-grid">${(state.videos || []).map((video) => `<div class="panel panel-body"><strong>${esc(video.name)}</strong><p class="small-text muted">${(video.size / 1024 / 1024).toFixed(1)} MB</p><button class="small quiet danger" data-delete-video="${esc(video.id)}">Remove video</button></div>`).join('') || '<p class="small-text muted">No saved videos.</p>'}</div>`;
 }
 function openDialog(title, html) {
   modal.innerHTML = `<div class="dialog-header"><h2 id="modal-title">${esc(title)}</h2><button type="button" data-action="close-modal" aria-label="Close dialog">×</button></div><div class="dialog-content">${html}</div>`;
@@ -456,6 +543,11 @@ function renderConnectFields(defaults = null) {
     const savedSecret = saved && type === 'password';
     return `<div class="field"><label for="credential-${name}">${label}${savedSecret ? ' · Saved' : ''}</label><input id="credential-${name}" name="${name}" type="${type}" placeholder="${savedSecret ? '•••••••• (saved — enter a replacement to change)' : placeholder}" value="${esc(defaults?.values[name] ?? value)}" ${required && !saved ? 'required' : ''} autocomplete="off" spellcheck="false" /></div>`;
   };
+  if (platform === 'youtube') {
+    $('#connect-fields').innerHTML =
+      `<p class="dialog-help">${esc(meta.help)} <button type="button" class="quiet small" data-guide="youtube">Open Setup Guide →</button></p><div class="field"><label for="youtube-credentials">Google Desktop app credentials JSON</label><input type="file" id="youtube-credentials" accept="application/json,.json" /><p class="small-text muted">Choose your downloaded file, then press Verify & connect to sign in with Google. This requires opening LightPost locally on this computer. Save unsaved posts before leaving the page.</p></div><details><summary>Manual connection / saved credentials</summary><p class="small-text muted">For a remote server, authorize locally first and enter its refresh token here. When reconnecting, leave saved fields blank to keep them, or choose a new JSON to authorize again.</p>${field('clientId', 'OAuth client ID', '', 'password', false)}${field('clientSecret', 'OAuth client secret', '', 'password', false)}${field('secret', 'Refresh token', '', 'password', false)}</details>`;
+    return;
+  }
   $('#connect-fields').innerHTML =
     `${defaults ? '<p class="notice">Your saved credentials are ready to use. Leave saved fields blank to keep them, or enter replacements.</p>' : ''}<p class="dialog-help">${esc(meta.help)} <button type="button" class="quiet small" data-guide="${esc(platform)}">Open Setup Guide →</button>${platform === 'linkedin' ? ' <a href="https://developer.linkedin.com/" target="_blank" rel="noopener noreferrer">Open developer portal ↗</a>' : ''}</p>${platform === 'facebook' ? field('pageId', 'Facebook Page ID', 'Your numeric Page ID', 'text') + field('secret', 'Page access token') : platform === 'telegram' ? field('chatId', 'Channel username or ID', '@yourchannel or -1001234567890', 'text') + field('secret', 'Bot token from BotFather') : platform === 'discord' ? field('secret', 'Discord server webhook URL', 'https://discord.com/api/webhooks/…') : ['instagram', 'threads', 'linkedin'].includes(platform) ? field('secret', platform === 'linkedin' ? 'Member access token' : 'Long-lived user access token') : platform === 'bluesky' ? field('handle', 'Bluesky handle', 'you.bsky.social', 'text') + field('instance', 'Home server (optional)', 'https://bsky.social', 'url', false) + field('secret', 'App password', 'xxxx-xxxx-xxxx-xxxx') : platform === 'mastodon' ? field('instance', 'Mastodon instance', 'https://mastodon.social', 'url', true, 'https://mastodon.social') + field('secret', 'Access token') : field('apiKey', 'Consumer Key (OAuth 1.0)') + field('apiSecret', 'Consumer Secret (OAuth 1.0)') + field('secret', 'Access Token (OAuth 1.0)') + field('tokenSecret', 'Access Token Secret (OAuth 1.0)')}`;
 }
@@ -497,6 +589,7 @@ async function runAction(button, work, errorTarget) {
     const target = errorTarget && $(errorTarget);
     if (target) target.textContent = error.message;
     else toast(error.message);
+    if (error.reconnectAccountIds?.length) showYoutubeReconnect(error.reconnectAccountIds);
   } finally {
     if (button.isConnected) {
       button.disabled = false;
@@ -518,7 +611,15 @@ document.addEventListener('submit', async (event) => {
       button,
       async () => {
         readComposer();
+        if (videoUploading) throw Error('Wait for the video upload to finish.');
         if (!composer.accountIds.length) throw Error('Select at least one account.');
+        const youtubeSelected = state.accounts.some(
+          (a) => a.platform === 'youtube' && composer.accountIds.includes(a.id),
+        );
+        if (!youtubeSelected) {
+          composer.videoId = null;
+          composer.youtube = freshComposer().youtube;
+        }
         for (const [id, alt] of Object.entries(composer.alts)) {
           const media = state.media.find((m) => m.id === id);
           if (composer.mediaIds.includes(id) && alt !== (media?.alt || ''))
@@ -549,6 +650,7 @@ document.addEventListener('submit', async (event) => {
           method: 'POST',
           body: {
             ...composer,
+            youtube: youtubeSelected ? composer.youtube : undefined,
             xCostConfirmed: status !== 'draft' && xAccounts.length > 0,
             status,
             scheduledAt: status === 'scheduled' ? date.toISOString() : null,
@@ -599,6 +701,24 @@ document.addEventListener('submit', async (event) => {
       async () => {
         const data = Object.fromEntries(new FormData(form));
         data.platform = $('#platform').value;
+        const file = $('#youtube-credentials')?.files?.[0];
+        if (data.platform === 'youtube' && file) {
+          if (file.size > 65536)
+            throw Error('Choose the small JSON downloaded for your Google Desktop app.');
+          let clientConfig;
+          try {
+            clientConfig = JSON.parse(await file.text());
+          } catch {
+            throw Error('That file is not valid JSON.');
+          }
+          const result = await api('/youtube/start', {
+            method: 'POST',
+            body: { id: data.id || null, clientConfig },
+          });
+          dirtyForms.delete('connect-form');
+          location.assign(result.url);
+          return;
+        }
         await api('/accounts', { method: 'POST', body: data });
         form.reset();
         closeDialog();
@@ -651,8 +771,56 @@ document.addEventListener('input', (event) => {
     updatePreview();
   }
 });
+let videoUploading = false;
+async function uploadYoutubeVideo(input) {
+  const file = input.files?.[0];
+  if (!file || videoUploading) return;
+  const status = $('#youtube-upload-status');
+  if (!file.name.toLowerCase().endsWith('.mp4') || file.size > 250 * 1024 * 1024) {
+    status.textContent = 'Choose an MP4 video of 250 MB or less.';
+    input.value = '';
+    return;
+  }
+  readComposer();
+  videoUploading = true;
+  input.disabled = true;
+  const buttons = $$('#post-form button[type="submit"]');
+  buttons.forEach((button) => {
+    button.disabled = true;
+  });
+  status.textContent = 'Uploading video to your LightPost server…';
+  try {
+    const body = new FormData();
+    body.append('file', file);
+    const video = await api('/videos', { method: 'POST', body });
+    state.videos ||= [];
+    state.videos.push(video);
+    readComposer();
+    composer.videoId = video.id;
+    dirtyForms.add('post-form');
+    const library = $('#youtube-video-library');
+    library.insertAdjacentHTML(
+      'beforeend',
+      `<option value="${esc(video.id)}">${esc(video.name)} · ${(video.size / 1024 / 1024).toFixed(1)} MB</option>`,
+    );
+    library.value = video.id;
+    input.value = '';
+    status.textContent = 'Video saved locally.';
+    updatePreview();
+    toast('Video saved locally. It will be sent to YouTube when this post is delivered.');
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    videoUploading = false;
+    input.disabled = false;
+    buttons.forEach((button) => {
+      button.disabled = false;
+    });
+  }
+}
 document.addEventListener('change', async (event) => {
   if (event.target.id === 'platform') renderConnectFields();
+  if (event.target.id === 'youtube-file') await uploadYoutubeVideo(event.target);
 });
 document.addEventListener('click', async (event) => {
   const button = event.target.closest('button');
@@ -664,6 +832,10 @@ document.addEventListener('click', async (event) => {
     return;
   }
   await runAction(button, async () => {
+    if (data.action === 'choose-video') {
+      $('#youtube-file').click();
+      return;
+    }
     if (data.action === 'toggle-region') {
       regionVisible = !regionVisible;
       for (const region of $$('[data-action="toggle-region"]')) {
@@ -717,6 +889,21 @@ document.addEventListener('click', async (event) => {
       await connectDialog(undefined, data.connectPlatform);
       return;
     }
+    if (data.youtubeReconnect) {
+      if (page === 'compose' && $('#post-form')) {
+        readComposer();
+        const draft = await api('/posts', {
+          method: 'POST',
+          body: { ...composer, status: 'draft', scheduledAt: null },
+        });
+        composer.id = draft.id;
+        dirtyForms.delete('post-form');
+        await reloadState();
+      }
+      closeDialog();
+      await connectDialog(data.youtubeReconnect);
+      return;
+    }
     if (data.reconnect) {
       await connectDialog(data.reconnect);
       return;
@@ -735,6 +922,8 @@ document.addEventListener('click', async (event) => {
         text: post.text,
         accountIds: post.accountIds.filter((id) => state.accounts.some((a) => a.id === id)),
         mediaIds: [...(post.mediaIds || [])],
+        videoId: post.videoId || null,
+        youtube: structuredClone(post.youtube || freshComposer().youtube),
         id: data.edit ? post.id : null,
         xAllowLinks: false,
         contentOptions: structuredClone(post.contentOptions || {}),
@@ -785,6 +974,12 @@ document.addEventListener('click', async (event) => {
       await api(`/posts/${data.deletePost}`, { method: 'DELETE' });
       await reloadState();
       renderPosts();
+      return;
+    }
+    if (data.deleteVideo) {
+      await api(`/videos/${data.deleteVideo}`, { method: 'DELETE' });
+      await reloadState();
+      renderSettings();
       return;
     }
     if (data.deleteMedia) {
@@ -852,6 +1047,7 @@ async function refreshPostStatus(force = false) {
   lastPostRefresh = Date.now();
   try {
     await reloadState();
+    renderConnectionNotice();
     if (page === 'posts') renderPostList();
     const count = $('.nav .count');
     if (count) count.textContent = `(${state.total})`;

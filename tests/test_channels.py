@@ -904,11 +904,12 @@ class NewApiTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status, 201)
 
-    async def test_catalog_has_nine_live_platforms(self):
+    async def test_catalog_has_ten_live_platforms(self):
         state = await (await self.client.get("/api/state")).json()
         self.assertEqual(
             {p["id"] for p in state["platforms"]},
             {
+                "youtube",
                 "bluesky",
                 "mastodon",
                 "x",

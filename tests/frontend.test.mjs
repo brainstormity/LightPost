@@ -269,6 +269,7 @@ test('dialogs, retry actions, and cancellation controls', async () => {
   for (const [platform, count] of [
     ['instagram', 14],
     ['x', 4],
+    ['youtube', 8],
   ]) {
     context.location.hash = `#docs/${platform}`;
     vm.runInContext('renderDocs()', context);
@@ -380,4 +381,74 @@ test('multi-platform preview shows X images and follows its image toggle', () =>
   assert.equal(images.hidden, true);
   vm.runInContext(`composer.contentOptions.x.image = true; updatePreview();`, context);
   assert.equal(images.hidden, false);
+
+  const video = elements.get('#preview-video');
+  let sourceChanges = 0;
+  let videoSource = '';
+  let resets = 0;
+  Object.defineProperty(video, 'src', {
+    get: () => videoSource,
+    set: (value) => {
+      sourceChanges++;
+      videoSource = value;
+      video.currentTime = 0;
+    },
+  });
+  video.pause = () => {};
+  video.removeAttribute = () => {
+    videoSource = '';
+  };
+  video.load = () => {
+    resets++;
+  };
+  vm.runInContext(
+    `
+    composer = freshComposer();
+    state.accounts = [{id: 'yt', platform: 'youtube', name: 'YouTube', handle: '@channel'}];
+    state.videos = [{id: 'video-one', name: 'My video.mp4', size: 1024}];
+    composer.accountIds = ['yt'];
+    composer.videoId = 'video-one';
+    composer.youtube.title = 'My video';
+    updatePreview();
+  `,
+    context,
+  );
+  assert.equal(sourceChanges, 1);
+  assert.equal(video.src, '/api/videos/video-one');
+  assert.equal(video.hidden, false);
+  assert.equal(elements.get('#youtube-file-name').textContent, 'My video.mp4');
+  assert.equal(elements.get('#preview-video-title').textContent, 'My video');
+  video.currentTime = 12;
+  vm.runInContext(
+    `
+    for (const text of ['A', 'A longer', 'A longer description']) {
+      composer.text = text;
+      updatePreview();
+    }
+  `,
+    context,
+  );
+  assert.equal(sourceChanges, 1, 'typing must not reload the video');
+  assert.equal(video.currentTime, 12, 'typing preserves playback position');
+  assert.equal(elements.get('#preview-text').textContent, 'A longer description');
+  assert.equal(vm.runInContext('freshComposer().youtube.madeForKids', context), false);
+  assert.equal(vm.runInContext('freshComposer().youtube.syntheticMedia', context), false);
+  assert.equal(vm.runInContext('freshComposer().youtube.visibility', context), '');
+  vm.runInContext(`composer.videoId = 'video-two'; updatePreview();`, context);
+  assert.equal(sourceChanges, 2, 'choosing another video replaces the source');
+  vm.runInContext(`composer.accountIds = []; updatePreview();`, context);
+  assert.equal(video.hidden, true);
+  assert.equal(resets, 1, 'deselecting YouTube releases the player');
+
+  elements.get('#modal').showModal = () => {};
+  vm.runInContext(`showYoutubeReconnect(['yt']);`, context);
+  assert.ok(
+    elements.get('#modal').innerHTML.includes('Save draft &amp; reconnect') ||
+      elements.get('#modal').innerHTML.includes('Save draft & reconnect'),
+  );
+  assert.ok(elements.get('#modal').innerHTML.includes('data-youtube-reconnect="yt"'));
+  assert.equal(vm.runInContext('composer.text', context), 'A longer description');
+  assert.equal(elements.get('#connection-notice').hidden, false);
+  vm.runInContext('renderAccounts()', context);
+  assert.ok(elements.get('#page').innerHTML.includes('Reconnect required'));
 });

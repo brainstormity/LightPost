@@ -18,6 +18,14 @@ from aiohttp.resolver import DefaultResolver
 
 PLATFORMS = [
     {
+        "id": "youtube",
+        "name": "YouTube",
+        "content": "One MP4 video + title and description",
+        "limit": 5000,
+        "help": "Enable YouTube Data API v3 in your own Google Cloud project. Create a Desktop app OAuth client and download its JSON. Add your Gmail as a test user, then choose the JSON below and connect with Google. Testing-mode authorization normally expires after seven days.",
+        "docs": "https://developers.google.com/youtube/v3/guides/uploading_a_video",
+    },
+    {
         "id": "discord",
         "name": "Discord",
         "content": "Text + up to 4 images",
@@ -311,7 +319,15 @@ class Transport:
         )
 
     async def __call__(
-        self, method, url, *, _binary=False, _receipt=False, _limit=2 * 1024 * 1024, **kwargs
+        self,
+        method,
+        url,
+        *,
+        _binary=False,
+        _receipt=False,
+        _limit=2 * 1024 * 1024,
+        _upload=False,
+        **kwargs,
     ):
         parsed = urlsplit(url)
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
@@ -327,7 +343,7 @@ class Transport:
             async with self.session.request(
                 method, url, allow_redirects=False, **kwargs
             ) as response:
-                if not 200 <= response.status < 300:
+                if not 200 <= response.status < 300 and not (_upload and response.status == 308):
                     error_body = bytearray()
                     if parsed.hostname in (
                         "graph.instagram.com",
@@ -356,6 +372,15 @@ class Transport:
                         return {
                             "data": data,
                             "headers": {"x-restli-id": response.headers.get("x-restli-id", "")},
+                        }
+                    if _upload:
+                        return {
+                            "data": data,
+                            "status": response.status,
+                            "headers": {
+                                name: response.headers.get(name, "")
+                                for name in ("Location", "Range")
+                            },
                         }
                     return data
                 except (ValueError, UnicodeError):
@@ -440,6 +465,8 @@ def text_length(platform, text):
 
 
 def destination_post(account, post):
+    if account["platform"] == "youtube":
+        return {**post, "mediaIds": []}
     options = post.get("contentOptions", {}).get(account["id"], {})
     include_images = account["platform"] == "instagram" or options.get("image", True)
     return {
@@ -451,6 +478,11 @@ def destination_post(account, post):
 
 def validate_post(account, post):
     if account.get("demo"):
+        return
+    if account["platform"] == "youtube":
+        from .youtube import validate_video_post
+
+        validate_video_post(post)
         return
     if not post["text"].strip() and not post.get("mediaIds"):
         raise ValueError(
@@ -497,6 +529,10 @@ class Providers:
         platform = data.get("platform")
         if platform not in SUPPORTED:
             raise ValueError("Choose one of the supported platforms.")
+        if platform == "youtube":
+            from .youtube import connect_channel
+
+            return await connect_channel(self, data)
         secret = str(data.get("secret", "")).strip()
         if not secret or len(secret) > 8192:
             raise ValueError("Enter your account's app password or access token.")
@@ -1360,6 +1396,12 @@ class Providers:
         validate_post(account, post)
         credentials = self.vault.decrypt(account["credentials"])
         platform = account["platform"]
+        if platform == "youtube":
+            from .youtube import publish_video
+
+            return await publish_video(
+                self, account, post, credentials, save_credentials, previous, checkpoint
+            )
         if platform == "discord":
             endpoint = discord_webhook(credentials["webhook"])["webhook"]
             if any(not image.get("sourceUrl") for image in images):

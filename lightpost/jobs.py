@@ -44,8 +44,20 @@ class Scheduler:
                         latest
                         and latest["status"] == "processing"
                         and latest.get("containerId")
-                        and latest.get("stage") in ("container", "verifying")
+                        and latest.get("stage") in ("container", "verifying", "youtube-upload")
                     )
+                    account = await self.store.get("accounts", id)
+                    if (
+                        latest
+                        and latest.get("containerId")
+                        and account
+                        and account["platform"] == "youtube"
+                        and latest.get("stage") in ("youtube-upload", "verifying")
+                        and latest["status"] in ("sending", "processing")
+                    ):
+                        resumable = True
+                        if latest["status"] == "sending":
+                            results.append({**latest, "status": "processing", "at": now()})
                     if not latest or latest["status"] not in DONE | {"failed"} and not resumable:
                         results.append(
                             {
@@ -69,10 +81,14 @@ class Scheduler:
 
     async def validate(self, post):
         images = [await self.image(id) for id in post.get("mediaIds", [])]
+        if post.get("videoId"):
+            await self.video(post["videoId"])
         for id in post["accountIds"]:
             account = await self.store.get("accounts", id)
             if not account:
                 raise ValueError("An account was disconnected. Select available accounts.")
+            if post.get("videoId") and account["platform"] != "youtube":
+                raise ValueError("Video posts support YouTube accounts only.")
             target = destination_post(account, post)
             validate_post(account, target)
             target_images = images if target.get("mediaIds") else []
@@ -127,6 +143,23 @@ class Scheduler:
             "alt": media.get("alt", ""),
             "sourceUrl": media.get("sourceUrl"),
         }
+
+    async def video(self, identity):
+        if not isinstance(identity, str):
+            raise ValueError("Choose a saved MP4 video.")
+        video = await self.store.get("videos", identity)
+        if not video:
+            raise ValueError("The attached video is missing. Upload it again.")
+        path = self.media_dir / (video["id"] + ".mp4")
+        from .youtube import MAX_VIDEO
+
+        if (
+            not path.is_file()
+            or path.stat().st_size != video["size"]
+            or not 0 < video["size"] <= MAX_VIDEO
+        ):
+            raise ValueError("The attached video file is missing or changed. Upload it again.")
+        return {**video, "path": str(path)}
 
     async def receipt(self, post_id, result):
         async with self.result_lock:
@@ -188,9 +221,12 @@ class Scheduler:
                     await self.receipt(post["id"], {**value, "accountId": id})
 
                 post = destination_post(account, post)
+                if account["platform"] == "youtube":
+                    post = {**post, "_video": await self.video(post.get("videoId"))}
                 images = images if post.get("mediaIds") else []
 
                 if account["platform"] in (
+                    "youtube",
                     "instagram",
                     "threads",
                     "linkedin",
@@ -206,6 +242,17 @@ class Scheduler:
             except PostingCancelled:
                 return
             except ProviderError as error:
+                if getattr(error, "reconnect_required", False):
+                    current_account = await self.store.get("accounts", id)
+                    if current_account:
+                        await self.store.put(
+                            "accounts",
+                            {
+                                **current_account,
+                                "connectionStatus": "reconnect_required",
+                                "connectionMessage": str(error),
+                            },
+                        )
                 result = {
                     "status": "uncertain" if error.uncertain else "failed",
                     "message": str(error),
@@ -217,12 +264,17 @@ class Scheduler:
                 ):
                     if value:
                         result[name] = value
-                if error.uncertain or checkpoint_state.get("stage") == "publishing":
+                if error.uncertain or checkpoint_state.get("stage") in (
+                    "publishing",
+                    "youtube-upload",
+                    "verifying",
+                ):
                     result = {**checkpoint_state, **result}
             except ValueError as error:
-                result = {"status": "failed", "message": str(error)}
+                result = {**checkpoint_state, "status": "failed", "message": str(error)}
             except Exception:
                 result = {
+                    **checkpoint_state,
                     "status": "uncertain",
                     "message": "No reliable delivery receipt. Check the platform before retrying.",
                 }
@@ -273,7 +325,14 @@ class Scheduler:
                 from datetime import datetime, timedelta, timezone
 
                 next_check = (
-                    (datetime.now(timezone.utc) + timedelta(seconds=3))
+                    (
+                        datetime.now(timezone.utc)
+                        + timedelta(
+                            seconds=max(
+                                [3, *(receipt.get("retryAfter", 3) for receipt in latest.values())]
+                            )
+                        )
+                    )
                     .isoformat(timespec="milliseconds")
                     .replace("+00:00", "Z")
                 )

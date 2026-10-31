@@ -1,6 +1,117 @@
 // Public setup instructions only. Never place account credentials in this file.
 export const guides = [
   {
+    id: 'youtube',
+    name: 'YouTube',
+    estimatedTime: '5–10 minutes',
+    account: 'Your own Google account with a YouTube channel',
+    steps: [
+      {
+        title: 'Create your Google Cloud project',
+        text: 'Navigate to [Google Cloud Console](https://console.cloud.google.com/). Select the project picker → **New project**, enter a name such as LightPost YouTube, and create it. Select that project before continuing.\n*The project names and IDs in these screenshots are examples.*',
+        images: [
+          {
+            src: '/images/youtube/create-project.png',
+            alt: 'Google Cloud new project form with a LightPost YouTube test project name.',
+          },
+        ],
+      },
+      {
+        title: 'Open APIs & Services',
+        text: 'Click on **APIs & Services** and select **Library**.',
+        images: [
+          {
+            src: '/images/youtube/select-project.png',
+            alt: 'Google Cloud welcome page showing the APIs & Services shortcut.',
+          },
+        ],
+      },
+      {
+        title: 'Enable YouTube Data API v3',
+        text: 'Search for **YouTube Data API v3**, select it, and press **Enable**.\n*When enabled, its page shows Enabled and offers Manage or Disable API (as shown in the next step).*',
+        images: [
+          {
+            src: '/images/youtube/api-library.png',
+            alt: 'Google API Library search result for YouTube Data API v3.',
+          },
+        ],
+      },
+      {
+        title: 'Open Google Auth Platform',
+        text: 'Click on **OAuth consent screen** on the left. This opens Google Auth Platform. Click **Get started**.',
+        images: [
+          {
+            src: '/images/youtube/api-enabled.png',
+            alt: 'Enabled YouTube Data API page with OAuth consent screen in the left navigation.',
+          },
+        ],
+      },
+      {
+        title: 'Complete the app setup',
+        text: 'Now complete the app setup:',
+        bullets: [
+          'Enter your **app name**.',
+          'Select your **support email**.',
+          'Select **External** for a personal Gmail account.',
+          'Add your **contact email**.',
+          'Review the required policy acknowledgement.',
+          'Complete setup.',
+        ],
+        images: [
+          {
+            src: '/images/youtube/oauth-setup.png',
+            alt: 'Google Auth Platform setup with App Information, Audience, Contact Information and Finish steps.',
+          },
+        ],
+      },
+      {
+        title: 'Open Audiences',
+        text: 'Click on **Audiences** on the left side.',
+        images: [
+          {
+            src: '/images/youtube/oauth-overview.png',
+            alt: 'Google Auth Platform overview with Audience in the left navigation.',
+          },
+        ],
+      },
+      {
+        title: 'Add yourself as a test user',
+        text: 'Keep the app in **Testing**, choose **Add users** under **Test users**, enter the exact Google email you will use for your YouTube channel, and save.\n*Adding a test user permits sign-in; you must still grant YouTube permissions when connecting.*',
+        images: [
+          {
+            src: '/images/youtube/test-users.png',
+            alt: 'Google Auth Platform Audience page with the Add users panel open.',
+          },
+        ],
+      },
+      {
+        title: 'Create a Desktop app client and download its JSON',
+        text: 'Open **Clients → Create client**. Choose **Desktop app**, give it a name such as LightPost Local, and create it. **Download JSON** from the confirmation screen and keep it private. You will use this for connecting your YouTube account to LightPost.\n*Do not share screenshots containing client secrets or tokens.*',
+        images: [
+          {
+            src: '/images/youtube/desktop-client.png',
+            alt: 'Create OAuth client ID form with Desktop app selected.',
+          },
+        ],
+      },
+      {
+        title: 'Connect YouTube in LightPost',
+        text: 'Finally connect your YouTube account to LightPost by going to **Accounts → Connect account → YouTube**, choose the downloaded JSON, and press **Verify & connect**.\n*Sign in with your test-user email, choose the intended YouTube channel and grant both upload and read access.*',
+        images: [],
+      },
+    ],
+    connectionNote: {
+      title: 'Keeping your YouTube account connected',
+      paragraphs: [
+        '**While your Google app is in Testing, you may need to approve access again after seven days.** If LightPost shows **Reconnect required**, click **Reconnect** and sign in with the Google account linked to your YouTube channel to renew authorization.',
+        '**You do not need to create or download new JSON credentials.**',
+        'For longer-lasting authorization, open [Google Auth Platform → Audience](https://console.cloud.google.com/auth/audience), select your project, and change the publishing status from **Testing** to **Production** by clicking **Publish app**. Then reconnect YouTube in LightPost to obtain fresh authorization. This removes the Testing-mode seven-day limit; access can still expire or be revoked for other reasons.',
+      ],
+    },
+    troubleshooting:
+      'Access blocked / developer-approved testers: add the exact sign-in email under Audience → Test users. Wrong channel: reconnect and choose the correct channel, or add it separately. Google rejects the JSON: use a Desktop app client rather than a Web application client. Expired authorization: reconnect, especially after seven days in Testing. Upload accepted but not visible: check processing, visibility and restrictions in YouTube Studio. A video locked private may require a YouTube API compliance audit; OAuth app verification is separate. Shorts eligibility is decided by YouTube; this integration uploads MP4 videos without a separate Shorts switch.',
+  },
+  {
     id: 'instagram',
     name: 'Instagram',
     estimatedTime: '5–10 minutes',

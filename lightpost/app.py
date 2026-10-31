@@ -37,12 +37,24 @@ KEYS = {
         "providers",
         "jobs",
         "test_transport",
+        "youtube_oauth",
     ]
 }
 
 
 def clean_account(account):
-    fields = ("id", "platform", "name", "handle", "remoteId", "demo", "createdAt", "limit")
+    fields = (
+        "id",
+        "platform",
+        "name",
+        "handle",
+        "remoteId",
+        "demo",
+        "createdAt",
+        "limit",
+        "connectionStatus",
+        "connectionMessage",
+    )
     return {
         **{k: account[k] for k in fields if k in account},
         **({"name": "X (Twitter)"} if account.get("platform") == "x" else {}),
@@ -99,7 +111,17 @@ async def guard(request, handler):
             {"error": error.text if error.status < 500 else "Server error."}, status=error.status
         )
     except (ValueError, ProviderError) as error:
-        response = web.json_response({"error": str(error)}, status=400)
+        response = web.json_response(
+            {
+                "error": str(error),
+                **(
+                    {"reconnectAccountIds": error.reconnect_account_ids}
+                    if getattr(error, "reconnect_account_ids", None)
+                    else {}
+                ),
+            },
+            status=400,
+        )
     except Exception:
         response = web.json_response(
             {"error": "Unable to complete this request. No changes were confirmed."}, status=500
@@ -107,8 +129,10 @@ async def guard(request, handler):
     response.headers.update(
         {
             "X-Content-Type-Options": "nosniff",
-            "Referrer-Policy": "same-origin",
-            "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+            "Referrer-Policy": "no-referrer"
+            if request.path == "/oauth/youtube/callback"
+            else "same-origin",
+            "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
             "Cache-Control": "no-store",
         }
     )
@@ -194,6 +218,7 @@ async def state(request):
             "roadmap": ROADMAP,
             "runtime": "Python async · SQLite",
             "authEnabled": bool(request.app[KEYS["config"]].password),
+            "videos": await store.all("videos"),
         }
     )
 
@@ -210,6 +235,12 @@ async def list_posts(request):
 def saved_connection_fields(app, account):
     credentials = app[KEYS["vault"]].decrypt(account["credentials"])
     platform = account["platform"]
+    if platform == "youtube":
+        return {
+            "clientId": credentials["clientId"],
+            "clientSecret": credentials["clientSecret"],
+            "secret": credentials["refreshToken"],
+        }
     if platform == "bluesky":
         return {
             "handle": credentials["identifier"],
@@ -268,8 +299,15 @@ async def connect(request):
                 data[field] = value
     # Verify outside the mutation lock; never persist unverified credentials.
     account = await app[KEYS["providers"]].connect(data)
+    account = await persist_account(app, account, data.get("id"))
+    return web.json_response(clean_account(account), status=201)
+
+
+async def persist_account(app, account, existing_id=None):
+    store = app[KEYS["store"]]
+    data = {"id": existing_id}
     async with app[KEYS["jobs"]].post_lock:
-        existing = await store.get("accounts", data.get("id", ""))
+        existing = await store.get("accounts", data.get("id") or "")
         if data.get("id"):
             if not existing or existing.get("demo") or existing["platform"] != account["platform"]:
                 raise ValueError("Reconnect an existing live account of the same platform.")
@@ -309,7 +347,7 @@ async def connect(request):
             createdAt=existing.get("createdAt", now()) if existing else now(),
         )
         await store.put("accounts", account)
-    return web.json_response(clean_account(account), status=201)
+    return account
 
 
 async def disconnect(request):
@@ -335,7 +373,7 @@ async def save_post(request):
         if (
             not isinstance(text, str)
             or len(text) > 10000
-            or (not text.strip() and not data.get("mediaIds"))
+            or (not text.strip() and not data.get("mediaIds") and not data.get("videoId"))
         ):
             raise ValueError(
                 "Write a post or attach an image. Text can be up to 10,000 characters."
@@ -374,6 +412,23 @@ async def save_post(request):
         scheduled_at = iso_time(data.get("scheduledAt")) if status == "scheduled" else None
         if scheduled_at and scheduled_at <= now():
             raise ValueError("Choose a future date and time.")
+        video_id = data.get("videoId")
+        youtube = data.get("youtube")
+        if video_id is not None and (not isinstance(video_id, str) or len(video_id) > 100):
+            raise ValueError("Choose a saved video.")
+        if youtube is not None and not isinstance(youtube, dict):
+            raise ValueError("Choose valid YouTube video details.")
+        if video_id:
+            await jobs.video(video_id)
+            if media_ids:
+                raise ValueError(
+                    "Video posts support YouTube accounts only and cannot include images."
+                )
+            for identity in ids:
+                if (await store.get("accounts", identity))["platform"] != "youtube":
+                    raise ValueError(
+                        "Video posts support YouTube accounts only. Create a separate post for other platforms."
+                    )
         post = {
             "id": old["id"] if old else str(uuid4()),
             "text": text.strip(),
@@ -386,6 +441,9 @@ async def save_post(request):
             "results": [],
             "xAllowLinks": data.get("xAllowLinks") is True,
             "contentOptions": options,
+            **(
+                {"videoId": video_id, "youtube": youtube} if video_id or youtube is not None else {}
+            ),
         }
         # Drafts can exceed platform limits; deliveries cannot.
         if status != "draft":
@@ -398,6 +456,9 @@ async def save_post(request):
                     "Confirm the estimated X (Twitter) API cost before scheduling or publishing."
                 )
             await jobs.validate(post)
+            from .youtube import check_accounts
+
+            await check_accounts(request.app, ids)
         else:
             for id in media_ids:
                 await jobs.image(id)
@@ -426,6 +487,9 @@ async def retry(request):
         ):
             raise ValueError("Confirm the estimated X (Twitter) API cost before retrying.")
         await jobs.validate(post)
+        from .youtube import check_accounts
+
+        await check_accounts(request.app, [a["id"] for a in accounts if a])
         post["status"] = "queued"
         post["retryRequestedAt"] = time.time()
         post.pop("cancelRequested", None)
@@ -455,7 +519,7 @@ async def cancel(request):
                 receipt = latest.get(account_id, {})
                 if receipt.get("status") in DONE | {"failed", "uncertain"}:
                     continue
-                sent = receipt.get("stage") in ("publishing", "verifying") or (
+                sent = receipt.get("stage") in ("publishing", "verifying", "youtube-upload") or (
                     receipt.get("status") == "sending" and not receipt.get("stage")
                 )
                 post.setdefault("results", []).append(
@@ -674,6 +738,10 @@ def create_app(config=None, transport=None):
     )
     if transport:
         app[KEYS["test_transport"]] = transport
+    from .youtube import routes as youtube_routes
+
+    app[KEYS["youtube_oauth"]] = {}
+    app.add_routes(youtube_routes())
     app.cleanup_ctx.append(lifecycle)
     app.add_routes(
         [

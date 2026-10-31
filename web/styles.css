@@ -1276,7 +1276,8 @@ dialog::backdrop {
   line-height: 1.5;
   margin: 0 0 12px;
 }
-.docs-section p {
+.docs-section p,
+.docs-section ul {
   font-size: 14px;
   line-height: 1.9;
   color: var(--muted);
@@ -2031,4 +2032,92 @@ button.saved-library-button:hover {
   .landing-footer {
     padding: 8px 16px;
   }
+}
+
+#youtube-fields {
+  margin: 18px 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+#youtube-fields h2 {
+  margin-top: 0;
+  font-size: 16px;
+}
+#preview-video,
+.post-video video {
+  display: block;
+  width: 100%;
+  max-height: 300px;
+  margin-bottom: 12px;
+  border-radius: 6px;
+  background: #101010;
+}
+.post-video {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+#connect-fields details {
+  margin: 18px 0;
+}
+#connect-fields summary {
+  cursor: pointer;
+}
+
+#preview-video[hidden] {
+  display: none;
+}
+#preview-video-title {
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+}
+.video-file-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+#youtube-file-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.connection-notice {
+  max-width: 1200px;
+  margin: 18px auto 0;
+  padding: 0 42px;
+}
+@media (max-width: 600px) {
+  .connection-notice {
+    padding: 0 17px;
+  }
+}
+
+.docs-connection-note {
+  margin-top: 24px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+}
+.docs-connection-note h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+.docs-connection-note p {
+  margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 1.9;
+  color: var(--muted);
+}
+.docs-connection-note p:last-child {
+  margin-bottom: 0;
+}
+
+.required-indicator {
+  color: #dc2626;
+}
+:root[data-theme='dark'] .required-indicator {
+  color: #ff8d87;
 }

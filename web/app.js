@@ -179,6 +179,7 @@ function renderLanding() {
     ['discord', 'Discord'],
     ['telegram', 'Telegram'],
     ['linkedin', 'LinkedIn'],
+    ['youtube', 'YouTube'],
     ['tiktok', 'TikTok'],
     ['pinterest', 'Pinterest'],
     ['google-business', 'Google Business Profile'],

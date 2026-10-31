@@ -42,7 +42,7 @@ One Python process, SQLite, and plain HTML/CSS/JavaScript. No external database,
 
 Images are limited to **1 MB each**. Use **Add Image** to import a direct public HTTPS JPEG URL. Keep its URL available until delivery completes for Instagram, Threads, and Discord; your server can remain private. Platform-specific limits appear in the composer and Setup Guide. Video uploads are supported for YouTube only: one local MP4 up to 250 MB per post (H.264/AAC recommended). Create separate posts for YouTube videos and other platforms.
 
-Bring your own authorized platform credentials. API fees, token expiry, permissions, and account eligibility still apply. YouTube includes a local Google OAuth connection using your own Desktop app client JSON; other platforms use credentials you obtain separately. For YouTube on a remote server, authorize locally and use Manual connection with a client ID, client secret and refresh token.
+Bring your own authorized platform credentials. API fees, token expiry, permissions, and account eligibility still apply.
 
 ## Run locally or on your server
 

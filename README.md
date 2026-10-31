@@ -60,16 +60,6 @@ Open [localhost:3000/app](http://localhost:3000/app), connect an account, and cr
 
 Keep the app running for scheduled delivery. For automatic startup on Linux, an optional systemd service is provided in [deploy/lightpost.service](deploy/lightpost.service); it expects the app at `/opt/lightpost`, a `lightpost` system user, and a writable `data/` directory.
 
-## YouTube setup
-
-Open **Setup Guide → YouTube** for illustrated instructions. Enable YouTube Data API v3 in your own Google Cloud project, configure Google Auth Platform, and create a **Desktop app** OAuth client. For a personal Gmail account choose **External**, keep the app in Testing initially, and add your exact sign-in email as a test user. Download the client JSON and choose it under **Accounts → Connect account → YouTube**. The browser must run on the same computer as LightPost; use `http://127.0.0.1:3000/app` (or your configured port). Save unsaved posts before Google sign-in. Grant upload and read permissions, verify the channel, then return to Accounts. LightPost stores client credentials and refresh tokens encrypted; they are never included in account responses or content exports.
-
-Before scheduling, posting or retrying a YouTube delivery, LightPost checks the cached authorization and refreshes it when needed. If Google rejects expired or revoked authorization, a reconnect prompt offers to save your post as a draft first, and Accounts shows **Reconnect required**. A temporary Google connection failure asks you to try again instead. Scheduled delivery checks again when it runs; authorization can expire between scheduling and delivery.
-
-External OAuth apps in **Testing** normally get refresh tokens that expire after seven days. Reconnect after expiry. For continued unattended use, review [Google’s personal-use verification exceptions](https://support.google.com/cloud/answer/13464323) and [token expiration rules](https://developers.google.com/identity/protocols/oauth2#expiration) before choosing your app’s production settings. OAuth app verification and YouTube API compliance restrictions are separate; check processing, restrictions and actual visibility in YouTube Studio after your first test upload. No public-publishing eligibility is guaranteed.
-
-YouTube posts support **one MP4 up to 250 MB**, a title, description, explicit visibility (Private/Unlisted/Public), audience and altered/synthetic content disclosure choices. Video posts select YouTube accounts only. Videos stream to local disk, and persisted upload-session addresses are encrypted. Scheduled uploads **begin at the scheduled time**; processing may delay availability. Cancellation stops further requests but cannot retract an upload already accepted by YouTube. After an uncertain delivery, check Studio before retrying or duplicating. Unused videos can be removed in Settings. Disconnect removes local credentials; revoke the Google grant in your Google Account if needed.
-
 ## Configuration and backups
 
 No `.env` file is required for the default setup. To override settings, copy [.env.example](.env.example) to `.env`. Environment variables take precedence.

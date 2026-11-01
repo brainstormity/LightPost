@@ -162,6 +162,7 @@ class FirstCommentE2ETests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status, 202, await response.text())
         await self.jobs.deliver(saved_draft["id"])
+        await self.jobs.wait_for_first_comments(saved_draft["id"])
         return await self.store.get("posts", saved_draft["id"])
 
     def social_calls(self):
@@ -277,6 +278,7 @@ class FirstCommentE2ETests(unittest.IsolatedAsyncioTestCase):
 
         # Scheduler reconciliation may replay after restart; a sent receipt prevents a duplicate.
         await self.jobs.process_first_comments(response_draft["id"])
+        await self.jobs.wait_for_first_comments(response_draft["id"])
         self.assertEqual(len(self.comment_calls()), 2)
         self.print_trace(
             platform="instagram",

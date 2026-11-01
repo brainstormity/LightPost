@@ -99,7 +99,8 @@ PLATFORMS = [
     },
 ]
 SUPPORTED = {p["id"] for p in PLATFORMS}
-FIRST_COMMENT_RATE_LIMIT_CODES = {4, 17, 32, 613, 80001, 80002}
+# Meta Graph docs mark 2/341 and the listed rate-limit codes as temporary/retryable.
+FIRST_COMMENT_RETRYABLE_CODES = {2, 4, 17, 32, 341, 613, 80001, 80002}
 ROADMAP = [
     {
         "name": "TikTok",
@@ -1080,11 +1081,11 @@ class Providers:
 
     @staticmethod
     def first_comment_provider_error(error, platform):
-        """Treat only explicit Meta rate-limit/auth/validation errors as definite rejections."""
+        """Classify only documented, explicit Meta Graph error responses."""
         if error.uncertain:
             return error
         if error.status == 408 or error.status == 429 or 300 <= error.status < 400:
-            if error.status == 429 and error.code in FIRST_COMMENT_RATE_LIMIT_CODES:
+            if error.status == 429 and error.code in FIRST_COMMENT_RETRYABLE_CODES:
                 return error
             return ProviderError(
                 f"Meta returned an ambiguous response while adding the {platform} comment. Check the post before retrying.",
@@ -1093,9 +1094,9 @@ class Providers:
                 subcode=error.subcode,
                 uncertain=True,
             )
-        if error.code in FIRST_COMMENT_RATE_LIMIT_CODES:
+        if error.code in FIRST_COMMENT_RETRYABLE_CODES:
             return error
-        if error.code in (10, 200) or error.status == 403:
+        if error.code in (3, 10, 200) or error.status == 403:
             permission = (
                 "Instagram denied comment access. Check that the token has instagram_business_manage_comments."
                 if platform == "instagram"
@@ -1108,8 +1109,30 @@ class Providers:
                 subcode=error.subcode,
                 uncertain=False,
             )
-        if error.status == 401 or error.code in (100, 190):
-            return error
+        if error.status == 401 or error.code == 190:
+            return ProviderError(
+                "Meta rejected comment authentication. Reconnect this account and verify its comment permissions.",
+                status=error.status,
+                code=error.code,
+                subcode=error.subcode,
+                uncertain=False,
+            )
+        if error.code == 100:
+            return ProviderError(
+                "Meta rejected the comment parameters. Check the comment text and published post before retrying.",
+                status=error.status,
+                code=error.code,
+                subcode=error.subcode,
+                uncertain=False,
+            )
+        if error.code == 368:
+            return ProviderError(
+                "Meta blocked this comment for policy reasons. Review the comment and account before retrying.",
+                status=error.status,
+                code=error.code,
+                subcode=error.subcode,
+                uncertain=False,
+            )
         return ProviderError(
             "Meta returned an unrecognized response while adding a comment. Check the post before retrying.",
             status=error.status,

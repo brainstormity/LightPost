@@ -1,11 +1,13 @@
 import asyncio
+import json
 import tempfile
 import unittest
 from collections import defaultdict, deque
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 from lightpost.jobs import Scheduler
-from lightpost.providers import ProviderError, Providers
+from lightpost.providers import ProviderError, Providers, now, platform_error
 from lightpost.security import Vault
 from lightpost.store import Store
 
@@ -177,12 +179,17 @@ class FirstCommentJobTests(unittest.IsolatedAsyncioTestCase):
         await self.save_account(instagram)
         await self.save_post("reject", [instagram], {"instagram": "Hello"})
         self.provider.outcomes["ig"].extend(
-            [ProviderError("Meta rejected the comment (HTTP 400).", status=400), "comment_ig"]
+            [
+                ProviderError("Meta rejected invalid comment input.", status=400, code=100),
+                "comment_ig",
+            ]
         )
 
         await self.jobs.process_first_comments("reject")
         self.assertEqual((await self.jobs.first_comment_results("reject"))[0]["status"], "rejected")
         self.assertEqual((await self.store.get("posts", "reject"))["status"], "published")
+        await self.jobs.process_first_comments("reject")
+        self.assertEqual(len(self.provider.calls), 1)
 
         await self.jobs.retry_first_comment("reject", "ig")
         await self.jobs.process_first_comments("reject")
@@ -192,6 +199,153 @@ class FirstCommentJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["remoteCommentId"], "comment_ig")
         self.assertEqual(len(self.provider.calls), 2)
         self.assertEqual((await self.store.get("posts", "reject"))["status"], "published")
+
+    async def test_documented_transient_graph_codes_retry_after_scheduler_restart(self):
+        instagram = account("ig", "instagram", "ig-user")
+        await self.save_account(instagram)
+        restarted = Scheduler(self.store, self.provider, self.directory.name)
+        for code in (2, 341):
+            post_id = f"transient-{code}"
+            await self.save_post(post_id, [instagram], {"instagram": "Hello"})
+            self.provider.outcomes["ig"].extend(
+                [
+                    ProviderError("Confirmed temporary Graph error.", status=400, code=code),
+                    f"comment_{code}",
+                ]
+            )
+
+            await self.jobs.process_first_comments(post_id)
+            record = next(
+                value
+                for value in await self.store.all("first_comments")
+                if value["postId"] == post_id
+            )
+            self.assertEqual(record["status"], "pending")
+            self.assertTrue(record["retryAt"])
+            attempts = len(self.provider.calls)
+
+            await restarted.recover_first_comments()
+            await restarted.process_first_comments(post_id)
+            self.assertEqual(len(self.provider.calls), attempts)
+
+            record["retryAt"] = "2000-01-01T00:00:00.000Z"
+            await self.store.put("first_comments", record)
+            await restarted.process_first_comments(post_id)
+            result = (await restarted.first_comment_results(post_id))[0]
+            self.assertEqual(result["status"], "sent")
+            self.assertEqual(result["remoteCommentId"], f"comment_{code}")
+        self.assertEqual((await self.store.get("posts", "transient-2"))["status"], "published")
+        self.assertEqual((await self.store.get("posts", "transient-341"))["status"], "published")
+        await restarted.close()
+
+    async def test_file_store_preserves_retry_sent_and_interrupted_states(self):
+        path = Path(self.directory.name) / "durable-comments.sqlite"
+        instagram = account("ig", "instagram", "ig-user")
+        self.provider.outcomes["ig"].extend(
+            [ProviderError("Temporary Graph failure.", status=400, code=2), "comment_durable"]
+        )
+        stores = []
+        schedulers = []
+
+        async def reopen():
+            store = await Store(str(path)).open()
+            scheduler = Scheduler(store, self.provider, self.directory.name)
+            stores.append(store)
+            schedulers.append(scheduler)
+            return store, scheduler
+
+        try:
+            first_store, first_jobs = await reopen()
+            await first_store.put("accounts", instagram)
+            await self.save_post("durable-retry", [instagram], {"instagram": "Hello"})
+            post = await self.store.get("posts", "durable-retry")
+            await first_store.put("posts", post)
+            await first_jobs.process_first_comments("durable-retry")
+            retry = next(
+                value
+                for value in await first_store.all("first_comments")
+                if value["postId"] == "durable-retry"
+            )
+            self.assertEqual(retry["status"], "pending")
+            self.assertTrue(retry["retryAt"])
+            await first_jobs.close()
+            schedulers.remove(first_jobs)
+            await first_store.close()
+            stores.remove(first_store)
+
+            second_store, second_jobs = await reopen()
+            await second_jobs.recover_first_comments()
+            retry = next(
+                value
+                for value in await second_store.all("first_comments")
+                if value["postId"] == "durable-retry"
+            )
+            self.assertTrue(retry["retryAt"])
+            await second_jobs.process_first_comments("durable-retry")
+            self.assertEqual(len(self.provider.calls), 1)
+
+            retry["retryAt"] = "2000-01-01T00:00:00.000Z"
+            await second_store.put("first_comments", retry)
+            await second_jobs.process_first_comments("durable-retry")
+            self.assertEqual(
+                (await second_jobs.first_comment_results("durable-retry"))[0]["status"],
+                "sent",
+            )
+            await second_jobs.close()
+            schedulers.remove(second_jobs)
+            await second_store.close()
+            stores.remove(second_store)
+
+            third_store, third_jobs = await reopen()
+            await third_jobs.recover_first_comments()
+            await third_jobs.process_first_comments("durable-retry")
+            receipt = (await third_jobs.first_comment_results("durable-retry"))[0]
+            self.assertEqual(receipt["status"], "sent")
+            self.assertEqual(receipt["remoteCommentId"], "comment_durable")
+            self.assertEqual(len(self.provider.calls), 2)
+
+            await third_store.put(
+                "posts",
+                {
+                    "id": "durable-interrupted",
+                    "status": "published",
+                    "accountIds": ["ig"],
+                    "firstComments": {"instagram": "Again"},
+                    "results": [
+                        {
+                            "accountId": "ig",
+                            "status": "published",
+                            "remoteId": "987654321098765",
+                        }
+                    ],
+                },
+            )
+            await third_jobs.reconcile_first_comments("durable-interrupted")
+            interrupted = next(
+                value
+                for value in await third_store.all("first_comments")
+                if value["postId"] == "durable-interrupted"
+            )
+            interrupted.update(status="sending", attempts=1)
+            await third_store.put("first_comments", interrupted)
+            await third_jobs.close()
+            schedulers.remove(third_jobs)
+            await third_store.close()
+            stores.remove(third_store)
+
+            fourth_store, fourth_jobs = await reopen()
+            await fourth_jobs.recover_first_comments()
+            self.assertEqual(
+                (await fourth_jobs.first_comment_results("durable-interrupted"))[0]["status"],
+                "uncertain",
+            )
+            await fourth_jobs.process_first_comments("durable-interrupted")
+            self.assertEqual(len(self.provider.calls), 2)
+        finally:
+            for scheduler in reversed(schedulers):
+                await scheduler.close()
+            for store in reversed(stores):
+                await store.close()
 
     async def test_ambiguous_failure_is_persisted_and_not_automatically_retried(self):
         instagram = account("ig", "instagram", "ig-user")
@@ -316,6 +470,104 @@ class FirstCommentJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.provider.calls), 1)
         self.assertEqual((await self.jobs.first_comment_results("concurrent"))[0]["status"], "sent")
 
+    async def test_stalled_comment_does_not_block_another_platform_scheduler_tick(self):
+        instagram = account("ig", "instagram", "ig-user")
+        bluesky = account("bsky", "bluesky", "did:plc:mock")
+        await self.save_account(instagram)
+        await self.save_account(bluesky)
+        await self.save_post("comment-post", [instagram], {"instagram": "Hello"})
+        await self.store.put(
+            "posts",
+            {
+                "id": "due-bluesky",
+                "text": "Publish while the comment request is stalled.",
+                "accountIds": ["bsky"],
+                "mediaIds": [],
+                "status": "queued",
+                "scheduledAt": None,
+                "createdAt": now(),
+                "results": [],
+            },
+        )
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def stalled_comment(*_):
+            self.provider.calls.append(("ig", "instagram", "987654321098765", "Hello"))
+            started.set()
+            await release.wait()
+            return "comment_ig"
+
+        self.provider.create_first_comment = stalled_comment
+        self.provider.publish = AsyncMock(
+            return_value={"status": "published", "remoteId": "at://mock/post"}
+        )
+        try:
+            await asyncio.wait_for(self.jobs.tick(), timeout=1)
+            await asyncio.wait_for(started.wait(), timeout=1)
+            other_post = await self.store.get("posts", "due-bluesky")
+            self.assertEqual(other_post["status"], "published")
+            self.assertEqual(self.provider.publish.await_count, 1)
+        finally:
+            release.set()
+
+        await asyncio.wait_for(self.jobs.wait_for_first_comments("comment-post"), timeout=1)
+        self.assertEqual(
+            (await self.jobs.first_comment_results("comment-post"))[0]["status"], "sent"
+        )
+
+    async def test_comment_backlog_does_not_hold_unstarted_destination_lock(self):
+        accounts = [account(f"fb-{index}", "facebook", f"{PAGE_ID}{index}") for index in range(4)]
+        for value in accounts:
+            await self.save_account(value)
+        for index, value in enumerate(accounts):
+            await self.save_post(f"published-{index}", [value], {"facebook": f"Comment {index}"})
+
+        started = asyncio.Queue()
+        release = asyncio.Event()
+
+        async def stalled_comment(value, remote_post_id, comment_text):
+            self.provider.calls.append(
+                (value["id"], value["platform"], remote_post_id, comment_text)
+            )
+            await started.put(value["id"])
+            await release.wait()
+            return f"comment_{value['id']}"
+
+        self.provider.create_first_comment = stalled_comment
+        self.provider.publish = AsyncMock(
+            return_value={"status": "published", "remoteId": "ig-new-post"}
+        )
+        self.jobs.schedule_first_comments()
+        try:
+            first_three = await asyncio.wait_for(
+                asyncio.gather(*(started.get() for _ in range(3))), timeout=1
+            )
+            self.assertEqual(len(set(first_three)), 3)
+            await self.store.put(
+                "posts",
+                {
+                    "id": "due-on-fourth-account",
+                    "text": "This due publication must not wait for a comment slot.",
+                    "accountIds": [accounts[3]["id"]],
+                    "mediaIds": [],
+                    "status": "queued",
+                    "scheduledAt": None,
+                    "createdAt": now(),
+                    "results": [],
+                },
+            )
+
+            await asyncio.wait_for(self.jobs.tick(), timeout=1)
+            published = await self.store.get("posts", "due-on-fourth-account")
+            self.assertEqual(published["status"], "published")
+            self.assertEqual(self.provider.publish.await_count, 1)
+        finally:
+            release.set()
+
+        await asyncio.wait_for(self.jobs.wait_for_first_comments(), timeout=1)
+        self.assertEqual(len(self.provider.calls), 4)
+
 
 class FirstCommentProviderTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -393,6 +645,7 @@ class FirstCommentProviderTests(unittest.IsolatedAsyncioTestCase):
             ProviderError("Request timed out.", status=408),
             ProviderError("Unexpected redirect.", status=302),
             ProviderError("Unknown Graph rejection.", status=400),
+            ProviderError("API Unknown.", status=400, code=1),
         ):
             with self.subTest(status=error.status, code=error.code):
                 self.send.reset_mock()
@@ -407,6 +660,47 @@ class FirstCommentProviderTests(unittest.IsolatedAsyncioTestCase):
             await self.providers.create_first_comment(instagram, "987654321098765", "Hello")
         self.assertFalse(caught.exception.uncertain)
         self.assertEqual(caught.exception.code, 80002)
+
+        self.send.reset_mock()
+        self.send.side_effect = ProviderError("Temporary Graph service error.", status=400, code=2)
+        with self.assertRaises(ProviderError) as caught:
+            await self.providers.create_first_comment(instagram, "987654321098765", "Hello")
+        self.assertFalse(caught.exception.uncertain)
+        self.assertEqual(caught.exception.code, 2)
+
+        self.send.reset_mock()
+        self.send.side_effect = ProviderError("Invalid comment parameters.", status=400, code=100)
+        with self.assertRaises(ProviderError) as caught:
+            await self.providers.create_first_comment(instagram, "987654321098765", "Hello")
+        self.assertFalse(caught.exception.uncertain)
+        self.assertEqual(caught.exception.code, 100)
+
+    def test_meta_graph_error_codes_keep_retry_and_permanent_classes_distinct(self):
+        for code in (2, 4, 17, 32, 341, 613, 80001, 80002):
+            with self.subTest(code=code):
+                error = platform_error(
+                    400,
+                    "graph.instagram.com",
+                    json.dumps({"error": {"code": code, "message": "mocked"}}).encode(),
+                )
+                classified = self.providers.first_comment_provider_error(error, "instagram")
+                self.assertFalse(classified.uncertain)
+                self.assertEqual(classified.code, code)
+
+        unknown = platform_error(
+            400,
+            "graph.instagram.com",
+            json.dumps({"error": {"code": 1, "message": "mocked"}}).encode(),
+        )
+        self.assertTrue(self.providers.first_comment_provider_error(unknown, "instagram").uncertain)
+        permanent = platform_error(
+            400,
+            "graph.instagram.com",
+            json.dumps({"error": {"code": 100, "message": "mocked"}}).encode(),
+        )
+        self.assertFalse(
+            self.providers.first_comment_provider_error(permanent, "instagram").uncertain
+        )
 
 
 if __name__ == "__main__":

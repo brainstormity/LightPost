@@ -14,7 +14,7 @@ A lightweight, self-hosted social media scheduler. Connect your accounts, write 
 - **YouTube videos:** connect your own channel, upload one MP4, choose visibility and audience, save drafts or schedule delivery. Resumable uploads and processing receipts survive restarts.
 - **Images and previews:** import public JPEG URLs, reuse images from Saved Library, add alt text, and preview your content before posting.
 - **Delivery tracking:** see individual account results and links to published posts. Retry unsuccessful destinations without repeating successful ones, or cancel further attempts.
-- **Instagram and Facebook first comments:** add optional platform-specific comments to each matching account after the post is confirmed. Comment results are tracked separately; uncertain outcomes need a platform check, and only confirmed rejections can be retried.
+- **Instagram and Facebook first comments:** add an optional platform-specific comment after each matching post is confirmed. Recognized Meta rate-limit and temporary service errors retry automatically in the durable background queue with backoff. Fix a permanent permission/auth or input validation rejection, then use the comment-only retry. Ambiguous outcomes, timeouts, lost receipts, and missing or unusable media/post IDs are held for review, never blindly replayed. Comment delivery never blocks or undoes a confirmed post.
 - **Persistent queue:** posts survive restarts, overdue schedules resume, and supported media-processing progress is saved.
 - **Account management:** verify connections, reconnect credentials, and disconnect accounts.
 - **Built-in setup guides:** account eligibility, credential instructions, permissions, and troubleshooting for every platform.
@@ -45,7 +45,7 @@ Images are limited to **1 MB each**. Use **Add Image** to import a direct public
 
 Bring your own authorized platform credentials. API fees, token expiry, permissions, and account eligibility still apply.
 
-Optional first comments need additional Meta permissions on the existing credentials: Instagram Login tokens need `instagram_business_manage_comments`; Facebook Page tokens need `pages_manage_engagement` and the Page's `MODERATE` task. Generate or reconnect with a token that has those grants. LightPost does not change token permissions for you. A comment is a separate platform request after publication, so a confirmed post can remain published even if its comment needs review.
+Optional first comments need additional Meta permissions on the existing credentials: Instagram Login tokens need `instagram_business_manage_comments`; Facebook Page tokens need `pages_manage_engagement` and the Page's `MODERATE` task. Generate or reconnect with a token that has those grants. LightPost does not change token permissions for you. A comment is a separate platform request after publication.
 
 ## Run locally or on your server
 

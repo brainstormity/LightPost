@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 from .providers import (
-    FIRST_COMMENT_RATE_LIMIT_CODES,
+    FIRST_COMMENT_RETRYABLE_CODES,
     ProviderError,
     destination_post,
     image_url,
@@ -37,10 +37,13 @@ class Scheduler:
         self.post_lock = asyncio.Lock()
         self.result_lock = asyncio.Lock()
         self.slots = asyncio.Semaphore(3)
+        self.first_comment_slots = asyncio.Semaphore(3)
         self.account_locks = {}
         self.first_comment_locks = {}
         self.active = set()
         self.task = None
+        self.first_comment_task = None
+        self.first_comments_requested = False
         self.stopping = False
         self.wake = asyncio.Event()
 
@@ -235,6 +238,48 @@ class Scheduler:
             )
         )
 
+    def schedule_first_comments(self):
+        """Queue a managed comment pass without holding up publication work."""
+        if self.stopping:
+            return
+        self.first_comments_requested = True
+        if self.first_comment_task is None or self.first_comment_task.done():
+            self.first_comment_task = asyncio.create_task(self._dispatch_first_comments())
+
+    async def _dispatch_first_comments(self):
+        import logging
+
+        current = asyncio.current_task()
+        try:
+            while not self.stopping:
+                self.first_comments_requested = False
+                try:
+                    await self.process_first_comments()
+                except Exception:
+                    logging.getLogger("lightpost").error(
+                        "First-comment dispatch failed; pending jobs remain in SQLite."
+                    )
+                if not self.first_comments_requested:
+                    break
+        finally:
+            if self.first_comment_task is current:
+                self.first_comment_task = None
+
+    async def wait_for_first_comments(self, post_id=None):
+        """Wait for the current comment pass; intended for tests and explicit drains."""
+        self.schedule_first_comments()
+        task = self.first_comment_task
+        if task:
+            await asyncio.shield(task)
+        if post_id is not None:
+            # A publication may have landed while the previous pass was running.
+            records = await self.first_comment_results(post_id)
+            if any(record["status"] == "pending" for record in records):
+                self.schedule_first_comments()
+                next_task = self.first_comment_task
+                if next_task:
+                    await asyncio.shield(next_task)
+
     async def deliver_first_comment(self, identity):
         lock = self.first_comment_locks.setdefault(identity, asyncio.Lock())
         async with lock:
@@ -280,69 +325,72 @@ class Scheduler:
                 return
 
             account_lock = self.account_locks.setdefault(record["accountId"], asyncio.Lock())
-            async with account_lock:
-                account = await self.store.get("accounts", record["accountId"])
-                if (
-                    not account
-                    or account.get("demo")
-                    or account.get("platform") != record["platform"]
-                ):
+            # A comment waiting for one of the bounded network slots must not hold
+            # an account lock needed by an already-due publication.
+            async with self.first_comment_slots:
+                async with account_lock:
+                    account = await self.store.get("accounts", record["accountId"])
+                    if (
+                        not account
+                        or account.get("demo")
+                        or account.get("platform") != record["platform"]
+                    ):
+                        record.update(
+                            status="needs_review",
+                            message="The destination account is unavailable. Review the published post manually.",
+                            updatedAt=now(),
+                        )
+                        await self.store.put("first_comments", record)
+                        return
                     record.update(
-                        status="needs_review",
-                        message="The destination account is unavailable. Review the published post manually.",
+                        status="sending",
+                        attempts=record.get("attempts", 0) + 1,
                         updatedAt=now(),
                     )
+                    record.pop("message", None)
                     await self.store.put("first_comments", record)
-                    return
-                record.update(
-                    status="sending",
-                    attempts=record.get("attempts", 0) + 1,
-                    updatedAt=now(),
-                )
-                record.pop("message", None)
-                await self.store.put("first_comments", record)
-                try:
-                    remote_comment_id = await self.providers.create_first_comment(
-                        account, record["remotePostId"], record["text"]
-                    )
-                except ProviderError as error:
-                    if not error.uncertain and error.code in FIRST_COMMENT_RATE_LIMIT_CODES:
-                        from datetime import datetime, timedelta, timezone
-
-                        delay = min(900, 15 * (2 ** min(record["attempts"] - 1, 6)))
-                        retry_at = (
-                            (datetime.now(timezone.utc) + timedelta(seconds=delay))
-                            .isoformat(timespec="milliseconds")
-                            .replace("+00:00", "Z")
+                    try:
+                        remote_comment_id = await self.providers.create_first_comment(
+                            account, record["remotePostId"], record["text"]
                         )
+                    except ProviderError as error:
+                        if not error.uncertain and error.code in FIRST_COMMENT_RETRYABLE_CODES:
+                            from datetime import datetime, timedelta, timezone
+
+                            delay = min(900, 15 * (2 ** min(record["attempts"] - 1, 6)))
+                            retry_at = (
+                                (datetime.now(timezone.utc) + timedelta(seconds=delay))
+                                .isoformat(timespec="milliseconds")
+                                .replace("+00:00", "Z")
+                            )
+                            record.update(
+                                status="pending",
+                                retryAt=retry_at,
+                                message="Meta returned a confirmed temporary error. The comment will be retried automatically.",
+                                updatedAt=now(),
+                            )
+                        else:
+                            record.update(
+                                status="uncertain" if error.uncertain else "rejected",
+                                message=str(error),
+                                updatedAt=now(),
+                            )
+                    except ValueError as error:
+                        record.update(status="rejected", message=str(error), updatedAt=now())
+                    except Exception:
                         record.update(
-                            status="pending",
-                            retryAt=retry_at,
-                            message="Meta rate limit reached. The comment will be retried automatically.",
+                            status="uncertain",
+                            message="No reliable comment receipt. Check Meta before retrying.",
                             updatedAt=now(),
                         )
                     else:
                         record.update(
-                            status="uncertain" if error.uncertain else "rejected",
-                            message=str(error),
+                            status="sent",
+                            remoteCommentId=str(remote_comment_id),
+                            message="First comment added.",
                             updatedAt=now(),
                         )
-                except ValueError as error:
-                    record.update(status="rejected", message=str(error), updatedAt=now())
-                except Exception:
-                    record.update(
-                        status="uncertain",
-                        message="No reliable comment receipt. Check Meta before retrying.",
-                        updatedAt=now(),
-                    )
-                else:
-                    record.update(
-                        status="sent",
-                        remoteCommentId=str(remote_comment_id),
-                        message="First comment added.",
-                        updatedAt=now(),
-                    )
-                await self.store.put("first_comments", record)
+                    await self.store.put("first_comments", record)
 
     async def retry_first_comment(self, post_id, account_id):
         """Retry a comment only after Meta confirmed the prior attempt was rejected."""
@@ -659,12 +707,12 @@ class Scheduler:
                 )
         finally:
             self.active.discard(id)
-        await self.process_first_comments(id)
+        self.schedule_first_comments()
 
     async def tick(self):
         posts = await self.store.due(now())
         await asyncio.gather(*(self.deliver(post["id"]) for post in posts))
-        await self.process_first_comments()
+        self.schedule_first_comments()
 
     async def loop(self):
         while not self.stopping:
@@ -697,3 +745,10 @@ class Scheduler:
             except asyncio.TimeoutError:
                 self.task.cancel()
                 await asyncio.gather(self.task, return_exceptions=True)
+        first_comment_task = self.first_comment_task
+        if first_comment_task:
+            try:
+                await asyncio.wait_for(asyncio.shield(first_comment_task), timeout=35)
+            except asyncio.TimeoutError:
+                first_comment_task.cancel()
+                await asyncio.gather(first_comment_task, return_exceptions=True)

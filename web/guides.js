@@ -283,7 +283,7 @@ export const guides = [
     limits:
       'One JPEG at a direct public HTTPS URL, up to 1 MB, with a caption up to 2,200 characters. An optional first comment is sent separately after the post is confirmed. Use Add Image in the composer. The URL must remain available until publishing finishes; your server can remain private. No Reels, Stories or carousels in this version.',
     troubleshooting:
-      'Check account eligibility, app-role invitation acceptance, token type and scopes. Optional first comments also require instagram_business_manage_comments. Meta must be able to fetch the JPEG without a login or redirect. Reconnect expired or revoked tokens.',
+      'Check account eligibility, app-role invitation acceptance, token type and scopes. Optional first comments also require instagram_business_manage_comments. Recognized Meta rate-limit and temporary service errors are automatically retried in the durable background queue with backoff. Fix a permanent permission/auth or input validation rejection, then use Retry comment; this only retries the comment, not the post. A timeout, ambiguous response, lost receipt, or missing or unusable media/post ID is held for review and never blindly replayed. Comment issues do not block or undo a confirmed post. Meta must be able to fetch the JPEG without a login or redirect. Reconnect expired or revoked tokens.',
   },
   {
     id: 'x',
@@ -474,7 +474,7 @@ export const guides = [
     limits:
       'Page feed posts only: text up to the app’s 10,000-character limit, and up to four JPEG/PNG images. An optional first comment can be sent separately after the post is confirmed. Images upload directly from this server; public image URLs are not required. Videos, Reels, Stories, groups and personal-profile posting are not included.',
     troubleshooting:
-      'A connection verifies Page identity; publishing and first comments need the matching granted Page permissions. If Meta rejects a post or comment, check the token’s granted permissions and your Page content access. For reliable scheduling, derive the Page token from a long-lived User token and check expiration in Meta’s [Access Token Debugger](https://developers.facebook.com/tools/debug/accesstoken/). LightPost does not extend Facebook tokens automatically. Tokens can expire or be revoked; use Reconnect to replace them. Check the Page before retrying an uncertain delivery.',
+      'A connection verifies Page identity; publishing and first comments need the matching granted Page permissions. Recognized Meta rate-limit and temporary service errors are automatically retried in the durable background queue with backoff. Fix a permanent permission/auth or input validation rejection, then use Retry comment; this only retries the comment, not the post. A timeout, ambiguous response, lost receipt, or missing or unusable media/post ID is held for review and never blindly replayed. Comment issues do not block or undo a confirmed post. If Meta rejects a post or comment, check the token’s granted permissions and your Page content access. For reliable scheduling, derive the Page token from a long-lived User token and check expiration in Meta’s [Access Token Debugger](https://developers.facebook.com/tools/debug/accesstoken/). LightPost does not extend Facebook tokens automatically. Tokens can expire or be revoked; use Reconnect to replace them. Check Meta before taking action on an uncertain delivery.',
   },
   {
     id: 'threads',

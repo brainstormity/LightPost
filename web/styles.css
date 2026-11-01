@@ -294,6 +294,28 @@ textarea::placeholder {
 .field p {
   margin: 0;
 }
+.first-comments {
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+}
+.first-comments h2,
+.first-comment-results h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.first-comments > p {
+  margin: 0 0 14px;
+}
+.first-comment-field:last-child {
+  margin-bottom: 0;
+}
+.first-comment-textarea {
+  min-height: 110px;
+}
 .account-options {
   display: grid;
   gap: 9px;
@@ -696,6 +718,16 @@ textarea::placeholder {
   padding-top: 15px;
   margin-top: 15px;
   border-top: 1px solid #eceeec;
+}
+.first-comment-results {
+  display: grid;
+  gap: 8px;
+  padding-top: 15px;
+  margin-top: 15px;
+  border-top: 1px solid #eceeec;
+}
+.first-comment-results h3 {
+  margin: 0;
 }
 .receipt {
   font-size: 11px;
@@ -1773,7 +1805,7 @@ button.saved-library-button:hover {
   background: var(--dark-soft);
   color: var(--muted);
 }
-:root[data-theme='dark'] :is(.preview-meta, .receipts) {
+:root[data-theme='dark'] :is(.preview-meta, .receipts, .first-comment-results) {
   border-color: var(--line);
 }
 :root[data-theme='dark'] .notice {

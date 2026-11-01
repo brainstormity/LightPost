@@ -14,6 +14,7 @@ A lightweight, self-hosted social media scheduler. Connect your accounts, write 
 - **YouTube videos:** connect your own channel, upload one MP4, choose visibility and audience, save drafts or schedule delivery. Resumable uploads and processing receipts survive restarts.
 - **Images and previews:** import public JPEG URLs, reuse images from Saved Library, add alt text, and preview your content before posting.
 - **Delivery tracking:** see individual account results and links to published posts. Retry unsuccessful destinations without repeating successful ones, or cancel further attempts.
+- **Instagram and Facebook first comments:** add an optional platform-specific comment after each matching post is confirmed. Recognized Meta rate-limit and temporary service errors retry automatically in the durable background queue with backoff. Fix a permanent permission/auth or input validation rejection, then use the comment-only retry. Ambiguous outcomes, timeouts, lost receipts, and missing or unusable media/post IDs are held for review, never blindly replayed. Comment delivery never blocks or undoes a confirmed post.
 - **Persistent queue:** posts survive restarts, overdue schedules resume, and supported media-processing progress is saved.
 - **Account management:** verify connections, reconnect credentials, and disconnect accounts.
 - **Built-in setup guides:** account eligibility, credential instructions, permissions, and troubleshooting for every platform.
@@ -43,6 +44,8 @@ One Python process, SQLite, and plain HTML/CSS/JavaScript. No external database,
 Images are limited to **1 MB each**. Use **Add Image** to import a direct public HTTPS JPEG URL. Keep its URL available until delivery completes for Instagram, Threads, and Discord; your server can remain private. Platform-specific limits appear in the composer and Setup Guide. Video uploads are supported for YouTube only: one local MP4 up to 250 MB per post (H.264/AAC recommended). Create separate posts for YouTube videos and other platforms.
 
 Bring your own authorized platform credentials. API fees, token expiry, permissions, and account eligibility still apply.
+
+Optional first comments need additional Meta permissions on the existing credentials: Instagram Login tokens need `instagram_business_manage_comments`; Facebook Page tokens need `pages_manage_engagement` and the Page's `MODERATE` task. Generate or reconnect with a token that has those grants. LightPost does not change token permissions for you. A comment is a separate platform request after publication.
 
 ## Run locally or on your server
 
@@ -77,7 +80,7 @@ This is a single-owner application. Use a trusted network or HTTPS for remote ac
 
 For a full backup, stop the app and copy the **entire data directory and `.env`** together. Preserve the encryption key. Post-history exports omit credentials and image files, so they are not full backups. Credentials, databases, and keys are excluded from Git.
 
-An interrupted delivery may need manual review if a platform accepted a post before the connection dropped. Check the destination before retrying; delivery across platforms is not atomic or guaranteed exactly once.
+An interrupted delivery may need manual review if a platform accepted a post or comment before the connection dropped. Check the destination before retrying; delivery across platforms is not atomic or guaranteed exactly once.
 
 ## Development
 

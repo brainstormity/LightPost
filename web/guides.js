@@ -119,7 +119,7 @@ export const guides = [
     approval:
       'Use your own Instagram Creator or Business account and add it to your Meta app as an app-role/test account. Regular personal Instagram accounts cannot publish through this API.',
     credentials:
-      'A long-lived Instagram Login user token with instagram_business_basic and instagram_business_content_publish. Not a Facebook Page token.',
+      'A long-lived Instagram Login user token with instagram_business_basic and instagram_business_content_publish. To use the optional first comment, also grant instagram_business_manage_comments and generate a token that includes it. Not a Facebook Page token.',
     steps: [
       {
         title: 'Use a professional Instagram account',
@@ -256,7 +256,7 @@ export const guides = [
       },
       {
         title: 'Authorize publishing access',
-        text: 'When the Instagram popup appears, log in to the same professional account you added as a tester. Review the requested access, ensure Access and publish content is enabled, then click Allow. LightPost needs profile/basic access and content publishing; comment, message, and insight features are not used by this app.',
+        text: 'When the Instagram popup appears, log in to the same professional account you added as a tester. Review the requested access, ensure Access and publish content is enabled, then click Allow. For optional first comments, also grant instagram_business_manage_comments when generating the token.',
         images: [
           {
             src: '/images/instagram/s14.png',
@@ -281,9 +281,9 @@ export const guides = [
       },
     ],
     limits:
-      'One JPEG at a direct public HTTPS URL, up to 1 MB, with a caption up to 2,200 characters. Use Add Image in the composer. The URL must remain available until publishing finishes; your server can remain private. No Reels, Stories or carousels in this version.',
+      'One JPEG at a direct public HTTPS URL, up to 1 MB, with a caption up to 2,200 characters. An optional first comment is sent separately after the post is confirmed. Use Add Image in the composer. The URL must remain available until publishing finishes; your server can remain private. No Reels, Stories or carousels in this version.',
     troubleshooting:
-      'Check account eligibility, app-role invitation acceptance, token type and scopes. Meta must be able to fetch the JPEG without a login or redirect. Reconnect expired or revoked tokens.',
+      'Check account eligibility, app-role invitation acceptance, token type and scopes. Optional first comments also require instagram_business_manage_comments. Recognized Meta rate-limit and temporary service errors are automatically retried in the durable background queue with backoff. Fix a permanent permission/auth or input validation rejection, then use Retry comment; this only retries the comment, not the post. A timeout, ambiguous response, lost receipt, or missing or unusable media/post ID is held for review and never blindly replayed. Comment issues do not block or undo a confirmed post. Meta must be able to fetch the JPEG without a login or redirect. Reconnect expired or revoked tokens.',
   },
   {
     id: 'x',
@@ -465,16 +465,16 @@ export const guides = [
     ],
     steps: [
       'Create a [Facebook Page](https://www.facebook.com/pages/creation/), or use one where you have full control or permission to create content. Your personal profile is not a Page.',
-      'Open [Meta for Developers](https://developers.facebook.com/apps/) and select your existing app, or create an app. Add the Manage everything on your Page use case. Add pages_manage_posts and its dependencies pages_read_engagement and pages_show_list where available in the app dashboard.',
-      'Open [Graph API Explorer](https://developers.facebook.com/tools/explorer/), select the same Meta app, and generate a User Access Token requesting those Page permissions. During authorization, select the Facebook Page you want to manage. If you change permissions, generate a new token; adding them in the dashboard does not update an old token.',
+      'Open [Meta for Developers](https://developers.facebook.com/apps/) and select your existing app, or create an app. Add the Manage everything on your Page use case. Add pages_manage_posts and its dependencies pages_read_engagement and pages_show_list where available in the app dashboard. To use the optional first comment, also grant pages_manage_engagement.',
+      'Open [Graph API Explorer](https://developers.facebook.com/tools/explorer/), select the same Meta app, and generate a User Access Token requesting those Page permissions. During authorization, select the Facebook Page you want to manage and confirm you have the Page MODERATE task. If you change permissions, generate a new token; adding them in the dashboard does not update an old token.',
       'In [Graph API Explorer](https://developers.facebook.com/tools/explorer/), run GET me/accounts?fields=id,name,access_token,tasks with the User token. Find your Page and copy its id and access_token. The token inside the Page entry is the Page access token. An empty data list can mean no Page is managed by this account, missing permissions, or that the Page was not selected during authorization.',
       'Open [Access Token Debugger](https://developers.facebook.com/tools/debug/accesstoken/), paste the **Page access token**, and click **Debug**. Scroll down and click Extend Access Token if that option is available. Copy the resulting Page token, debug it again, and confirm **Type: Page** and **Expires: Never** before saving it in LightPost.\n\n*If the token still has an expiry date, extend the User token in the debugger, then use that long-lived User token in Graph API Explorer to request the Page token again with GET me/accounts?fields=id,name,access_token,tasks. Check the new Page token in the debugger. Never means no scheduled expiry; permission or account-security changes can still invalidate it.*',
       'In LightPost → Accounts → Connect account → Facebook Pages, enter the Page ID and Page access token. Verify & connect checks the Page identity without publishing a test post.',
     ],
     limits:
-      'Page feed posts only: text up to the app’s 10,000-character limit, and up to four JPEG/PNG images. Images upload directly from this server; public image URLs are not required. Videos, Reels, Stories, groups and personal-profile posting are not included.',
+      'Page feed posts only: text up to the app’s 10,000-character limit, and up to four JPEG/PNG images. An optional first comment can be sent separately after the post is confirmed. Images upload directly from this server; public image URLs are not required. Videos, Reels, Stories, groups and personal-profile posting are not included.',
     troubleshooting:
-      'A connection verifies Page identity; publishing still needs the correct Page permissions. If Meta rejects a post, check the token’s granted permissions and your Page content access. For reliable scheduling, derive the Page token from a long-lived User token and check expiration in Meta’s [Access Token Debugger](https://developers.facebook.com/tools/debug/accesstoken/). LightPost does not extend Facebook tokens automatically. Tokens can expire or be revoked; use Reconnect to replace them. Check the Page before retrying an uncertain delivery.',
+      'A connection verifies Page identity; publishing and first comments need the matching granted Page permissions. Recognized Meta rate-limit and temporary service errors are automatically retried in the durable background queue with backoff. Fix a permanent permission/auth or input validation rejection, then use Retry comment; this only retries the comment, not the post. A timeout, ambiguous response, lost receipt, or missing or unusable media/post ID is held for review and never blindly replayed. Comment issues do not block or undo a confirmed post. If Meta rejects a post or comment, check the token’s granted permissions and your Page content access. For reliable scheduling, derive the Page token from a long-lived User token and check expiration in Meta’s [Access Token Debugger](https://developers.facebook.com/tools/debug/accesstoken/). LightPost does not extend Facebook tokens automatically. Tokens can expire or be revoked; use Reconnect to replace them. Check Meta before taking action on an uncertain delivery.',
   },
   {
     id: 'threads',

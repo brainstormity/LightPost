@@ -53,6 +53,26 @@ const mark = (platform) =>
   `<span class="platform-mark ${esc(platform)}" aria-hidden="true">${platformLogos.has(platform) ? `<img src="/logos/${platform}.svg" alt="" width="20" height="20" decoding="async" />` : icon('accounts')}</span>`;
 const badge = (status) =>
   `<span class="badge ${esc(status)}" role="status">${['queued', 'publishing', 'sending', 'processing'].includes(status) ? '<span class="sending-spinner" aria-hidden="true"></span>' : ''}${esc({ needs_review: 'Check platform', uncertain: 'Check platform', cancelled: 'Cancelled', partial: 'Partly delivered', blocked: 'Paused', publishing: 'Sending', sending: 'Sending', processing: 'Processing', queued: 'Queued', published: 'Published' }[status] || status)}</span>`;
+function firstCommentBadge(status) {
+  const labels = {
+    pending: 'Queued',
+    sending: 'Sending',
+    sent: 'Sent',
+    rejected: 'Failed',
+    uncertain: 'Check platform',
+    needs_review: 'Check platform',
+  };
+  const tones = {
+    pending: 'queued',
+    sending: 'sending',
+    sent: 'published',
+    rejected: 'failed',
+    uncertain: 'needs_review',
+    needs_review: 'needs_review',
+  };
+  const active = ['pending', 'sending'].includes(status);
+  return `<span class="badge ${tones[status] || 'failed'}" role="status">${active ? '<span class="sending-spinner" aria-hidden="true"></span>' : ''}${esc(labels[status] || 'Failed')}</span>`;
+}
 const root = $('#root');
 const modal = $('#modal');
 const pages = ['compose', 'posts', 'accounts', 'settings', 'docs'];
@@ -80,7 +100,17 @@ function freshComposer() {
     scheduledAt: '',
     xAllowLinks: false,
     contentOptions: {},
+    firstComments: {},
   };
+}
+function cleanFirstComments(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    ['instagram', 'facebook']
+      .map((platform) => [platform, value[platform]])
+      .filter(([, text]) => typeof text === 'string' && text.trim())
+      .map(([platform, text]) => [platform, text.trim()]),
+  );
 }
 function toast(message) {
   $('#toast').textContent = message;
@@ -257,6 +287,7 @@ function renderCompose() {
   $('#page').innerHTML =
     `<div class="page-header"><div><h1>${composer.id ? 'Edit post' : 'New post'}</h1><p>Write once. Choose where it goes.</p></div><span class="eyebrow">Your publishing desk</span></div><div class="compose-grid"><form id="post-form" class="panel"><div class="panel-heading">Post details<span class="muted small-text">${composer.id ? 'Editing saved post' : 'Not yet saved'}</span></div><div class="panel-body"><div class="destination-heading"><span class="label">Publish to</span>${available.length ? '<label class="select-all-accounts"><input type="checkbox" id="select-all-accounts" /> Select all</label>' : ''}</div><div class="account-options">${available.length ? available.map((a) => `<div class="account-option"><label class="account-select"><input type="checkbox" name="account" value="${esc(a.id)}" ${composer.accountIds.includes(a.id) ? 'checked' : ''} />${mark(a.platform)}<span class="account-info"><strong>${esc(a.name)}</strong><span>${esc(a.handle)}</span></span></label><div class="content-options">${(a.platform === 'youtube' ? [] : ['text', 'image']).map((kind) => `<label><span${requiredContent(a.platform, kind) ? ' class="required-toggle" tabindex="0"' : ''}><input type="checkbox" role="switch" data-content-account="${esc(a.id)}" data-content-kind="${kind}" aria-label="${esc(a.handle)}: ${kind}" ${requiredContent(a.platform, kind) || composer.contentOptions[a.id]?.[kind] !== false ? 'checked' : ''} ${requiredContent(a.platform, kind) ? 'disabled aria-description="Required for this platform"' : ''} />${requiredContent(a.platform, kind) ? '<span class="required-toggle-tooltip" role="tooltip">Required for this platform</span>' : ''}</span>${kind === 'text' ? 'Text' : 'Image'}</label>`).join('')}</div></div>`).join('') : '<div class="notice">Connect an account to get started. <button type="button" class="small" data-action="connect">Connect account</button></div>'}</div><div id="youtube-fields" hidden>${youtubeFields()}</div><label class="label" for="post-text">Your post / YouTube description</label><textarea id="post-text" name="text" placeholder="What would you like to share?" maxlength="10000">${esc(composer.text)}</textarea><div class="compose-tools"><div><button type="button" class="small image-url-button" data-action="source-image">Add Image</button><button type="button" class="small saved-library-button" data-action="library">Saved Library</button></div><span class="counter" id="counter"></span></div><div class="char-hints" id="char-hints"></div><div id="attachments" class="attachments"></div><div id="destination-notice"></div><div id="x-options" hidden><label class="x-link-option"><input type="checkbox" id="x-allow-links" ${composer.xAllowLinks ? 'checked' : ''} /> Allow links — X (Twitter) charges $0.20 per post per X (Twitter) account.</label><p class="small-text muted" id="x-cost-estimate"></p></div><div class="schedule-box"><div class="field"><label for="scheduled-at">Schedule date & time</label><input type="datetime-local" id="scheduled-at" value="${esc(composer.scheduledAt || localInput())}" required /></div></div><p class="error" id="post-error" role="alert"></p><div class="actions"><button type="submit" value="draft">Save draft</button><button type="submit" value="scheduled">Schedule</button><button type="submit" class="primary" value="now">Publish now ↗</button></div><p class="form-footnote">Publish now sends to your selected accounts.<br>YouTube: one MP4 up to 250 MB; video posts use YouTube accounts only. Scheduled uploads start at the selected time, then YouTube processes the video.<br>Images: up to 1 MB each. X (Twitter): up to four images. Instagram: one public JPEG. Threads: text or one public JPEG. Other channels: up to four imported images.</p></div></form><aside class="preview-column"><div class="preview-topline"><span class="eyebrow">Post preview</span><span class="muted small-text">Content preview</span></div><div class="panel preview-card"><div class="preview-user"><span class="avatar" id="preview-avatar">${esc(state.settings.name.slice(0, 1).toUpperCase())}</span><div><strong id="preview-name">${esc(state.settings.name)}</strong><span id="preview-destination">Select your accounts</span></div></div><h3 id="preview-video-title" hidden></h3><video id="preview-video" controls preload="metadata" aria-label="Selected YouTube video" hidden></video><div class="preview-text" id="preview-text"></div><div class="preview-images" id="preview-images"></div><div class="preview-meta"><span>♡ &nbsp; ◯ &nbsp; ↗</span><span>Just now</span></div></div><p class="preview-note">The final appearance depends on the platform. Your content is sent as written, with no AI edits.</p><div class="note-box"><h3>One post, several destinations.</h3><p>You can select multiple accounts on the same platform. Each delivery gets its own result, so a failed destination does not hide successful ones.</p></div></aside></div>`;
   renderAttachments();
+  renderFirstCommentFields();
   updatePreview();
 }
 function youtubeFields() {
@@ -284,6 +315,40 @@ function readComposer() {
     const options = (composer.contentOptions[input.dataset.contentAccount] ||= {});
     options[input.dataset.contentKind] = input.checked;
   }
+  composer.firstComments = cleanFirstComments(composer.firstComments);
+  for (const input of $$('[data-first-comment]')) {
+    const platform = input.dataset.firstComment;
+    const text = input.value.trim();
+    if (text) composer.firstComments[platform] = text;
+    else delete composer.firstComments[platform];
+  }
+}
+function renderFirstCommentFields() {
+  let container = $('#first-comments-fields');
+  if (!container) {
+    const anchor = $('#destination-notice');
+    if (!anchor) return;
+    container = document.createElement('div');
+    container.id = 'first-comments-fields';
+    anchor.insertAdjacentElement('afterend', container);
+  }
+  const selectedPlatforms = new Set(
+    state.accounts
+      .filter((account) => composer.accountIds.includes(account.id))
+      .map((account) => account.platform),
+  );
+  const fields = [
+    ['instagram', 'Instagram'],
+    ['facebook', 'Facebook Pages'],
+  ].filter(([platform]) => selectedPlatforms.has(platform));
+  container.innerHTML = fields.length
+    ? `<section class="first-comments" aria-label="First comments"><h2>First comment <span class="muted">(optional)</span></h2><p class="small-text muted">LightPost adds this as a separate comment after the post is confirmed. Comment delivery is tracked separately.</p>${fields
+        .map(
+          ([platform, name]) =>
+            `<div class="field first-comment-field"><label for="first-comment-${platform}">${name} first comment</label><textarea class="first-comment-textarea" id="first-comment-${platform}" data-first-comment="${platform}" maxlength="10000" aria-describedby="first-comment-${platform}-help" placeholder="Add a first comment">${esc(composer.firstComments?.[platform] || '')}</textarea><p id="first-comment-${platform}-help" class="small-text muted">Used for each selected ${name} account.</p></div>`,
+        )
+        .join('')}</section>`
+    : '';
 }
 function needsPublicImage() {
   return state.accounts.some(
@@ -430,7 +495,13 @@ function renderPostList() {
   if (!$('#post-list')) return;
   const posts =
     filter === 'attention'
-      ? postList.filter((p) => ['failed', 'partial', 'needs_review', 'blocked'].includes(p.status))
+      ? postList.filter(
+          (p) =>
+            ['failed', 'partial', 'needs_review', 'blocked'].includes(p.status) ||
+            (p.firstCommentResults || []).some((result) =>
+              ['rejected', 'uncertain', 'needs_review'].includes(result.status),
+            ),
+        )
       : postList;
   $('#post-list').className = posts.length ? 'post-list' : '';
   $('#post-list').innerHTML = posts.length
@@ -440,6 +511,7 @@ function renderPostList() {
             Object.values(Object.fromEntries((post.results || []).map((r) => [r.accountId, r]))),
             (result) => state.accounts.find((account) => account.id === result.accountId)?.platform,
           );
+          const firstCommentResults = post.firstCommentResults || [];
           return `<article class="post-row"><div class="post-row-top"><span class="post-time">${dateText(post.scheduledAt || post.finishedAt || post.createdAt)}</span>${post.status === 'published' ? '<span class="post-published">PUBLISHED</span>' : badge(post.status)}</div><div class="post-content-card">${(post.mediaIds || []).length ? `<div class="post-thumbnail"><img src="/api/media/${encodeURIComponent(post.mediaIds[0])}" alt="${esc(post.alts?.[post.mediaIds[0]] || state.media.find((m) => m.id === post.mediaIds[0])?.alt || 'Attached image')}" loading="lazy" />${post.mediaIds.length > 1 ? `<span class="post-image-count" aria-label="${post.mediaIds.length} attached images">+${post.mediaIds.length - 1}</span>` : ''}</div>` : ''}${post.videoId ? `<div class="post-video"><video controls preload="none" src="/api/videos/${encodeURIComponent(post.videoId)}" aria-label="${esc(post.youtube?.title || 'YouTube video')}"></video><strong>${esc(post.youtube?.title || 'YouTube video')}</strong><span class="small-text muted">${esc(post.youtube?.visibility || '')}</span></div>` : ''}${post.text ? `<p class="post-text">${esc(post.text)}</p>` : ''}</div>${
             !latest.length
               ? `<div class="post-accounts">${instagramLast(
@@ -465,6 +537,20 @@ function renderPostList() {
                         ? ''
                         : r.message;
                     return `<div class="receipt">${a ? mark(a.platform) : ''}<strong>${esc(a?.handle || 'Account')}</strong> · ${r.status === 'published' ? '<span class="published-check" role="img" aria-label="Published" title="Published"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="9"/><path d="m5.8 10 2.7 2.7 5.7-5.4"/></svg></span>' : badge(r.status)} ${link ? `<a href="${esc(link)}" target="_blank" rel="noopener noreferrer">View post ↗</a>` : ''}${message ? `<p>${esc(message)}</p>` : ''}</div>`;
+                  })
+                  .join('')}</div>`
+              : ''
+          }${
+            firstCommentResults.length
+              ? `<div class="first-comment-results"><h3>First comments</h3>${firstCommentResults
+                  .map((result) => {
+                    const account = state.accounts.find((item) => item.id === result.accountId);
+                    const message = result.message ? `<p>${esc(result.message)}</p>` : '';
+                    const retry =
+                      result.status === 'rejected'
+                        ? `<button class="quiet small" data-retry-first-comment="${esc(post.id)}" data-comment-account="${esc(result.accountId)}">Retry comment</button>`
+                        : '';
+                    return `<div class="receipt">${mark(result.platform)}<strong>${esc(account?.handle || 'Account')}</strong> · ${firstCommentBadge(result.status)}${message}${retry}</div>`;
                   })
                   .join('')}</div>`
               : ''
@@ -767,6 +853,8 @@ document.addEventListener('input', (event) => {
       $$('input[name="account"]').forEach((input) => {
         input.checked = event.target.checked;
       });
+      readComposer();
+      renderFirstCommentFields();
     }
     if (event.target.dataset.alt) composer.alts[event.target.dataset.alt] = event.target.value;
     updatePreview();
@@ -822,6 +910,10 @@ async function uploadYoutubeVideo(input) {
 document.addEventListener('change', async (event) => {
   if (event.target.id === 'platform') renderConnectFields();
   if (event.target.id === 'youtube-file') await uploadYoutubeVideo(event.target);
+  if (event.target.name === 'account') {
+    readComposer();
+    renderFirstCommentFields();
+  }
 });
 document.addEventListener('click', async (event) => {
   const button = event.target.closest('button');
@@ -928,6 +1020,7 @@ document.addEventListener('click', async (event) => {
         id: data.edit ? post.id : null,
         xAllowLinks: false,
         contentOptions: structuredClone(post.contentOptions || {}),
+        firstComments: cleanFirstComments(post.firstComments),
         scheduledAt: data.edit && post.scheduledAt ? localInput(post.scheduledAt) : '',
       };
       await navigate('compose');
@@ -946,6 +1039,17 @@ document.addEventListener('click', async (event) => {
       await reloadState();
       renderPosts();
       toast('Unsuccessful destinations queued for retry.');
+      return;
+    }
+    if (data.retryFirstComment) {
+      await api(`/posts/${data.retryFirstComment}/first-comments/${data.commentAccount}/retry`, {
+        method: 'POST',
+        body: {},
+      });
+      await reloadState();
+      await loadPosts();
+      renderPosts();
+      toast('Confirmed rejected first comment queued for retry.');
       return;
     }
     if (data.cancel) {
@@ -1041,7 +1145,13 @@ let refreshingPosts = false;
 let lastPostRefresh = 0;
 async function refreshPostStatus(force = false) {
   if (!state || document.hidden || refreshingPosts) return;
-  const active = state.posts.some((p) => ['queued', 'publishing', 'processing'].includes(p.status));
+  const active = state.posts.some(
+    (p) =>
+      ['queued', 'publishing', 'processing'].includes(p.status) ||
+      (p.firstCommentResults || []).some((result) =>
+        ['pending', 'sending'].includes(result.status),
+      ),
+  );
   if (page !== 'posts' && !active) return;
   if (!force && Date.now() - lastPostRefresh < (active ? 2000 : 10000)) return;
   refreshingPosts = true;

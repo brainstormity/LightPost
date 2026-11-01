@@ -71,6 +71,28 @@ def iso_time(value):
         raise ValueError("Choose a date and time with a timezone.") from None
 
 
+def normalize_first_comments(value):
+    if not isinstance(value, dict) or set(value) - {"instagram", "facebook"}:
+        raise ValueError("Choose valid Instagram and Facebook first comments.")
+    comments = {}
+    for platform, text in value.items():
+        if not isinstance(text, str):
+            raise ValueError("First comments must be text.")
+        text = text.strip()
+        if len(text) > 10000:
+            raise ValueError("First comments can be up to 10,000 characters each.")
+        if text:
+            comments[platform] = text
+    return comments
+
+
+async def attach_first_comment_results(app, posts):
+    """Expose comment job receipts separately from the post publication result."""
+    jobs = app[KEYS["jobs"]]
+    results_by_post = await jobs.first_comment_results_for([post["id"] for post in posts])
+    return [{**post, "firstCommentResults": results_by_post[post["id"]]} for post in posts]
+
+
 async def read_json(request):
     try:
         value = await request.json()
@@ -191,6 +213,7 @@ async def logout(request):
 async def state(request):
     store = request.app[KEYS["store"]]
     posts, total = await store.posts()
+    posts = await attach_first_comment_results(request.app, posts)
     async with store.db.execute(
         "SELECT json_extract(value, '$.status'), count(*) FROM records WHERE kind='posts' AND COALESCE(json_extract(value, '$.demo'),0)=0 AND json_extract(value, '$.status')!='simulated' GROUP BY 1"
     ) as cursor:
@@ -229,6 +252,7 @@ async def list_posts(request):
     except ValueError:
         raise ValueError("Invalid page.") from None
     posts, total = await request.app[KEYS["store"]].posts(request.query.get("status", ""), offset)
+    posts = await attach_first_comment_results(request.app, posts)
     return web.json_response({"posts": posts, "total": total})
 
 
@@ -406,6 +430,10 @@ async def save_post(request):
         ):
             raise ValueError("Choose valid Text and Image options.")
         options = {id: options[id] for id in ids if id in options}
+        if "firstComments" in data:
+            first_comments = normalize_first_comments(data["firstComments"])
+        else:
+            first_comments = normalize_first_comments((old or {}).get("firstComments", {}))
         status = data.get("status")
         if status not in ("draft", "now", "scheduled"):
             raise ValueError("Choose draft, publish now or schedule.")
@@ -441,6 +469,7 @@ async def save_post(request):
             "results": [],
             "xAllowLinks": data.get("xAllowLinks") is True,
             "contentOptions": options,
+            **({"firstComments": first_comments} if first_comments else {}),
             **(
                 {"videoId": video_id, "youtube": youtube} if video_id or youtube is not None else {}
             ),
@@ -496,6 +525,26 @@ async def retry(request):
         post.pop("message", None)
         await store.put("posts", post)
     return web.json_response(post, status=202)
+
+
+async def retry_first_comment(request):
+    await read_json(request)
+    store, jobs = request.app[KEYS["store"]], request.app[KEYS["jobs"]]
+    post_id, account_id = request.match_info["id"], request.match_info["account_id"]
+    async with jobs.post_lock:
+        post = await store.get("posts", post_id)
+        if not post:
+            raise ValueError("Post not found.")
+        if account_id not in post.get("accountIds", []):
+            raise ValueError("This account is not a destination for the post.")
+        account = await store.get("accounts", account_id)
+        if not account or account.get("platform") not in ("instagram", "facebook"):
+            raise ValueError("First comments are available only for Instagram and Facebook Pages.")
+        if not (post.get("firstComments") or {}).get(account["platform"]):
+            raise ValueError("This post has no first comment for that platform.")
+        await jobs.retry_first_comment(post_id, account_id)
+        jobs.wake.set()
+    return web.json_response({"ok": True}, status=202)
 
 
 async def cancel(request):
@@ -752,6 +801,7 @@ def create_app(config=None, transport=None):
             web.get("/api/posts", list_posts),
             web.post("/api/posts", save_post),
             web.post("/api/posts/{id}/retry", retry),
+            web.post("/api/posts/{id}/first-comments/{account_id}/retry", retry_first_comment),
             web.post("/api/posts/{id}/cancel", cancel),
             web.delete("/api/posts/{id}", delete_post),
             web.post("/api/accounts", connect),

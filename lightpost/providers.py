@@ -99,6 +99,8 @@ PLATFORMS = [
     },
 ]
 SUPPORTED = {p["id"] for p in PLATFORMS}
+# Meta Graph docs mark 2/341 and the listed rate-limit codes as temporary/retryable.
+FIRST_COMMENT_RETRYABLE_CODES = {2, 4, 17, 32, 341, 613, 80001, 80002}
 ROADMAP = [
     {
         "name": "TikTok",
@@ -1013,6 +1015,131 @@ class Providers:
                 subcode=error.subcode,
                 uncertain=error.uncertain,
             ) from None
+
+    async def create_first_comment(self, account, remote_post_id, text):
+        """Create one Facebook Page or Instagram media comment and return its receipt ID."""
+        platform = account.get("platform")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("Enter a first comment before sending it.")
+        if platform == "instagram":
+            remote_post_id = str(remote_post_id or "")
+            if not regex.fullmatch(r"[0-9]{1,30}", remote_post_id):
+                raise ValueError("Instagram needs the confirmed media ID to add a comment.")
+            credentials = self.vault.decrypt(account["credentials"])
+            token = credentials.get("token")
+            if not isinstance(token, str) or not token:
+                raise ValueError("Reconnect this Instagram account before adding a comment.")
+            try:
+                result = await self.send(
+                    "POST",
+                    self.meta_base("instagram") + "/" + remote_post_id + "/comments",
+                    headers={"Authorization": "Bearer " + token},
+                    data={"message": text},
+                )
+            except ProviderError as error:
+                raise self.first_comment_provider_error(error, platform) from None
+        elif platform == "facebook":
+            credentials = self.vault.decrypt(account["credentials"])
+            page_id = str(credentials.get("pageId", ""))
+            remote_post_id = str(remote_post_id or "")
+            if (
+                not regex.fullmatch(r"[0-9]{5,25}", page_id)
+                or page_id != str(account.get("remoteId", ""))
+                or not regex.fullmatch(page_id + r"_[0-9]+", remote_post_id)
+            ):
+                raise ValueError("Facebook needs the confirmed Page post ID to add a comment.")
+            try:
+                result = await self.facebook_call(
+                    credentials,
+                    "POST",
+                    remote_post_id + "/comments",
+                    data={"message": text},
+                )
+            except ProviderError as error:
+                raise self.first_comment_provider_error(error, platform) from None
+        else:
+            raise ValueError("First comments are supported for Instagram and Facebook Pages.")
+
+        comment_id = result.get("id") if isinstance(result, dict) else None
+        if type(comment_id) not in (str, int):
+            raise ProviderError(
+                "Meta returned no reliable comment receipt. Check the post before retrying.",
+                uncertain=True,
+            )
+        comment_id = str(comment_id)
+        valid_comment_id = (
+            regex.fullmatch(r"[0-9]+", comment_id)
+            if platform == "instagram"
+            else regex.fullmatch(r"[0-9]+(?:_[0-9]+){0,2}", comment_id)
+        )
+        if not valid_comment_id or len(comment_id) > 150:
+            raise ProviderError(
+                "Meta returned no reliable comment receipt. Check the post before retrying.",
+                uncertain=True,
+            )
+        return comment_id
+
+    @staticmethod
+    def first_comment_provider_error(error, platform):
+        """Classify only documented, explicit Meta Graph error responses."""
+        if error.uncertain:
+            return error
+        if error.status == 408 or error.status == 429 or 300 <= error.status < 400:
+            if error.status == 429 and error.code in FIRST_COMMENT_RETRYABLE_CODES:
+                return error
+            return ProviderError(
+                f"Meta returned an ambiguous response while adding the {platform} comment. Check the post before retrying.",
+                status=error.status,
+                code=error.code,
+                subcode=error.subcode,
+                uncertain=True,
+            )
+        if error.code in FIRST_COMMENT_RETRYABLE_CODES:
+            return error
+        if error.code in (3, 10, 200) or error.status == 403:
+            permission = (
+                "Instagram denied comment access. Check that the token has instagram_business_manage_comments."
+                if platform == "instagram"
+                else "Facebook denied comment access. Check that this Page token can manage comments."
+            )
+            return ProviderError(
+                permission,
+                status=error.status,
+                code=error.code,
+                subcode=error.subcode,
+                uncertain=False,
+            )
+        if error.status == 401 or error.code == 190:
+            return ProviderError(
+                "Meta rejected comment authentication. Reconnect this account and verify its comment permissions.",
+                status=error.status,
+                code=error.code,
+                subcode=error.subcode,
+                uncertain=False,
+            )
+        if error.code == 100:
+            return ProviderError(
+                "Meta rejected the comment parameters. Check the comment text and published post before retrying.",
+                status=error.status,
+                code=error.code,
+                subcode=error.subcode,
+                uncertain=False,
+            )
+        if error.code == 368:
+            return ProviderError(
+                "Meta blocked this comment for policy reasons. Review the comment and account before retrying.",
+                status=error.status,
+                code=error.code,
+                subcode=error.subcode,
+                uncertain=False,
+            )
+        return ProviderError(
+            "Meta returned an unrecognized response while adding a comment. Check the post before retrying.",
+            status=error.status,
+            code=error.code,
+            subcode=error.subcode,
+            uncertain=True,
+        )
 
     async def publish_facebook(self, account, post, images, credentials, previous, checkpoint):
         page_id = str(credentials.get("pageId", ""))

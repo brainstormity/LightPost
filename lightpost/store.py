@@ -54,7 +54,7 @@ class Store:
         where = "kind='posts' AND COALESCE(json_extract(value, '$.demo'),0)=0 AND json_extract(value, '$.status')!='simulated'"
         args = []
         if status == "attention":
-            where += " AND json_extract(value, '$.status') IN ('failed','partial','needs_review','blocked')"
+            where += " AND (json_extract(value, '$.status') IN ('failed','partial','needs_review','blocked') OR EXISTS (SELECT 1 FROM records AS comment_records WHERE comment_records.kind='first_comments' AND json_extract(comment_records.value, '$.postId')=records.id AND json_extract(comment_records.value, '$.status') IN ('rejected','uncertain','needs_review')))"
         elif status:
             where += " AND json_extract(value, '$.status')=?"
             args.append(status)

@@ -68,19 +68,19 @@ class FirstCommentJobTests(unittest.IsolatedAsyncioTestCase):
             "status": status,
             "accountIds": [value["id"] for value in accounts],
             "results": receipts
-                if receipts is not None
-                else [
-                    {
-                        "accountId": value["id"],
-                        "status": "published",
-                        "remoteId": (
-                            value["remoteId"] + "_42"
-                            if value["platform"] == "facebook"
-                            else "987654321098765"
-                        ),
-                    }
-                    for value in accounts
-                ],
+            if receipts is not None
+            else [
+                {
+                    "accountId": value["id"],
+                    "status": "published",
+                    "remoteId": (
+                        value["remoteId"] + "_42"
+                        if value["platform"] == "facebook"
+                        else "987654321098765"
+                    ),
+                }
+                for value in accounts
+            ],
         }
         if comments is not None:
             value["firstComments"] = comments
@@ -148,9 +148,7 @@ class FirstCommentJobTests(unittest.IsolatedAsyncioTestCase):
         await self.jobs.process_first_comments("multi")
 
         self.assertEqual(len(self.provider.calls), 3)
-        self.assertEqual(
-            {call[0] for call in self.provider.calls}, {"ig-one", "ig-two", "fb"}
-        )
+        self.assertEqual({call[0] for call in self.provider.calls}, {"ig-one", "ig-two", "fb"})
         self.assertEqual(
             {item["accountId"] for item in await self.jobs.first_comment_results("multi")},
             {"ig-one", "ig-two", "fb"},
@@ -199,12 +197,16 @@ class FirstCommentJobTests(unittest.IsolatedAsyncioTestCase):
         instagram = account("ig", "instagram", "ig-user")
         await self.save_account(instagram)
         await self.save_post("uncertain", [instagram], {"instagram": "Hello"})
-        self.provider.outcomes["ig"].append(ProviderError("Connection interrupted.", uncertain=True))
+        self.provider.outcomes["ig"].append(
+            ProviderError("Connection interrupted.", uncertain=True)
+        )
 
         await self.jobs.process_first_comments("uncertain")
         await self.jobs.process_first_comments("uncertain")
 
-        self.assertEqual((await self.jobs.first_comment_results("uncertain"))[0]["status"], "uncertain")
+        self.assertEqual(
+            (await self.jobs.first_comment_results("uncertain"))[0]["status"], "uncertain"
+        )
         self.assertEqual(len(self.provider.calls), 1)
 
     async def test_rate_limit_uses_durable_backoff_then_retries_automatically(self):
@@ -242,7 +244,9 @@ class FirstCommentJobTests(unittest.IsolatedAsyncioTestCase):
         await self.save_post("interrupted", [instagram], {"instagram": "Again"})
         await restarted.reconcile_first_comments("interrupted")
         record = next(
-            item for item in await self.store.all("first_comments") if item["postId"] == "interrupted"
+            item
+            for item in await self.store.all("first_comments")
+            if item["postId"] == "interrupted"
         )
         record.update(status="sending", attempts=1)
         await self.store.put("first_comments", record)
@@ -285,7 +289,9 @@ class FirstCommentJobTests(unittest.IsolatedAsyncioTestCase):
             {first_page[0]["id"], second_page[0]["id"]},
             {"published-rejected", "published-uncertain"},
         )
-        self.assertEqual((await self.store.get("posts", "published-rejected"))["status"], "published")
+        self.assertEqual(
+            (await self.store.get("posts", "published-rejected"))["status"], "published"
+        )
 
     async def test_concurrent_scheduler_calls_only_post_once_per_account(self):
         instagram = account("ig", "instagram", "ig-user")
@@ -356,7 +362,9 @@ class FirstCommentProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call.kwargs["data"], {"message": "Thanks"})
         self.assertEqual(call.kwargs["headers"]["Authorization"], "Bearer MOCK_FB_TOKEN")
 
-    async def test_container_id_and_malformed_success_receipt_are_never_used_as_comment_targets(self):
+    async def test_container_id_and_malformed_success_receipt_are_never_used_as_comment_targets(
+        self,
+    ):
         instagram = {
             "id": "ig",
             "platform": "instagram",
@@ -390,9 +398,7 @@ class FirstCommentProviderTests(unittest.IsolatedAsyncioTestCase):
                 self.send.reset_mock()
                 self.send.side_effect = error
                 with self.assertRaises(ProviderError) as caught:
-                    await self.providers.create_first_comment(
-                        instagram, "987654321098765", "Hello"
-                    )
+                    await self.providers.create_first_comment(instagram, "987654321098765", "Hello")
                 self.assertTrue(caught.exception.uncertain)
 
         self.send.reset_mock()

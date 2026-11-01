@@ -175,9 +175,8 @@ class Scheduler:
                             )
                             await self.store.put("first_comments", existing)
                         elif (
-                            (existing.get("platform") != platform or existing.get("text") != text)
-                            and existing.get("status") != "sent"
-                        ):
+                            existing.get("platform") != platform or existing.get("text") != text
+                        ) and existing.get("status") != "sent":
                             existing.update(
                                 status="needs_review",
                                 message="First-comment settings changed after delivery was queued. Review the destination before retrying.",
@@ -312,8 +311,10 @@ class Scheduler:
 
                         delay = min(900, 15 * (2 ** min(record["attempts"] - 1, 6)))
                         retry_at = (
-                            datetime.now(timezone.utc) + timedelta(seconds=delay)
-                        ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                            (datetime.now(timezone.utc) + timedelta(seconds=delay))
+                            .isoformat(timespec="milliseconds")
+                            .replace("+00:00", "Z")
+                        )
                         record.update(
                             status="pending",
                             retryAt=retry_at,
@@ -354,14 +355,18 @@ class Scheduler:
             if record.get("status") != "rejected":
                 raise ValueError("Only a confirmed rejected first comment can be retried.")
             post = await self.store.get("posts", post_id)
-            latest = next(
-                (
-                    receipt
-                    for receipt in reversed(post.get("results", []))
-                    if receipt.get("accountId") == account_id
-                ),
-                None,
-            ) if post else None
+            latest = (
+                next(
+                    (
+                        receipt
+                        for receipt in reversed(post.get("results", []))
+                        if receipt.get("accountId") == account_id
+                    ),
+                    None,
+                )
+                if post
+                else None
+            )
             current_text = post.get("firstComments", {}).get(record["platform"], "") if post else ""
             if (
                 not post
@@ -377,7 +382,9 @@ class Scheduler:
                     updatedAt=now(),
                 )
                 await self.store.put("first_comments", record)
-                raise ValueError("The confirmed post or comment settings changed; review it manually.")
+                raise ValueError(
+                    "The confirmed post or comment settings changed; review it manually."
+                )
             record.update(status="pending", message="Comment retry queued.", updatedAt=now())
             record.pop("retryAt", None)
             await self.store.put("first_comments", record)

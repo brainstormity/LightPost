@@ -1,7 +1,16 @@
 import asyncio
+import hashlib
+import re
 from pathlib import Path
 
-from .providers import ProviderError, destination_post, image_url, now, validate_post
+from .providers import (
+    FIRST_COMMENT_RATE_LIMIT_CODES,
+    ProviderError,
+    destination_post,
+    image_url,
+    now,
+    validate_post,
+)
 
 BUSY = {"queued", "publishing", "scheduled", "processing"}
 DONE = {"published", "simulated"}
@@ -29,6 +38,7 @@ class Scheduler:
         self.result_lock = asyncio.Lock()
         self.slots = asyncio.Semaphore(3)
         self.account_locks = {}
+        self.first_comment_locks = {}
         self.active = set()
         self.task = None
         self.stopping = False
@@ -78,6 +88,301 @@ class Scheduler:
                     await self.store.put(
                         "posts", {**post, "status": "blocked", "message": str(error)}
                     )
+        await self.recover_first_comments()
+
+    @staticmethod
+    def first_comment_record_id(post_id, account_id):
+        identity = f"{post_id}\0{account_id}".encode()
+        return hashlib.sha256(identity).hexdigest()
+
+    @staticmethod
+    def valid_comment_post_id(platform, account, remote_post_id):
+        if platform == "instagram":
+            return bool(re.fullmatch(r"[0-9]{1,30}", remote_post_id))
+        if platform == "facebook":
+            page_id = str(account.get("remoteId", ""))
+            return bool(
+                re.fullmatch(r"[0-9]{5,25}", page_id)
+                and re.fullmatch(re.escape(page_id) + r"_[0-9]+", remote_post_id)
+            )
+        return False
+
+    async def first_comment_results_for(self, post_ids):
+        ids = set(post_ids)
+        results = {post_id: [] for post_id in ids}
+        records = [
+            record
+            for record in await self.store.all("first_comments")
+            if record.get("postId") in ids
+        ]
+        for record in sorted(
+            records, key=lambda value: (value.get("postId", ""), value.get("accountId", ""))
+        ):
+            item = {
+                "accountId": record["accountId"],
+                "platform": record["platform"],
+                "status": record["status"],
+                "updatedAt": record.get("updatedAt"),
+            }
+            for field in ("remoteCommentId", "message"):
+                if record.get(field) is not None:
+                    item[field] = record[field]
+            results[record["postId"]].append(item)
+        return results
+
+    async def first_comment_results(self, post_id):
+        return (await self.first_comment_results_for((post_id,))).get(post_id, [])
+
+    async def reconcile_first_comments(self, post_id=None):
+        """Create or validate durable comment jobs from confirmed destination receipts."""
+        for post in await self.store.all("posts"):
+            if post_id is not None and post.get("id") != post_id:
+                continue
+            comments = post.get("firstComments")
+            if not isinstance(comments, dict):
+                continue
+            latest = {}
+            for receipt in post.get("results", []):
+                if isinstance(receipt, dict) and receipt.get("accountId"):
+                    latest[receipt["accountId"]] = receipt
+            for account_id in post.get("accountIds", []):
+                account = await self.store.get("accounts", account_id)
+                if not account or account.get("demo"):
+                    continue
+                platform = account.get("platform")
+                text = comments.get(platform)
+                receipt = latest.get(account_id)
+                if (
+                    platform not in ("instagram", "facebook")
+                    or not isinstance(text, str)
+                    or not text.strip()
+                    or not receipt
+                    or receipt.get("status") != "published"
+                ):
+                    continue
+                text = text.strip()
+                remote_post_id = str(receipt.get("remoteId") or "")
+                identity = self.first_comment_record_id(post["id"], account_id)
+                lock = self.first_comment_locks.setdefault(identity, asyncio.Lock())
+                async with lock:
+                    existing = await self.store.get("first_comments", identity)
+                    if existing:
+                        if existing.get("remotePostId") != remote_post_id:
+                            existing.update(
+                                status="needs_review",
+                                message="The confirmed publication ID changed after a comment result was recorded. Review the destination manually.",
+                                updatedAt=now(),
+                            )
+                            await self.store.put("first_comments", existing)
+                        elif (
+                            (existing.get("platform") != platform or existing.get("text") != text)
+                            and existing.get("status") != "sent"
+                        ):
+                            existing.update(
+                                status="needs_review",
+                                message="First-comment settings changed after delivery was queued. Review the destination before retrying.",
+                                updatedAt=now(),
+                            )
+                            await self.store.put("first_comments", existing)
+                        continue
+
+                    valid_id = self.valid_comment_post_id(platform, account, remote_post_id)
+                    record = {
+                        "id": identity,
+                        "postId": post["id"],
+                        "accountId": account_id,
+                        "platform": platform,
+                        "text": text,
+                        "remotePostId": remote_post_id,
+                        "status": "pending" if valid_id else "needs_review",
+                        "attempts": 0,
+                        "createdAt": now(),
+                        "updatedAt": now(),
+                    }
+                    if not valid_id:
+                        record["message"] = (
+                            "The post was marked published without a reliable media ID for its first comment. Review the destination manually."
+                        )
+                    await self.store.put("first_comments", record)
+
+    async def recover_first_comments(self):
+        """Keep interrupted POSTs in manual review, then recover any enqueue crash window."""
+        for record in await self.store.all("first_comments"):
+            if record.get("status") != "sending":
+                continue
+            lock = self.first_comment_locks.setdefault(record["id"], asyncio.Lock())
+            async with lock:
+                current = await self.store.get("first_comments", record["id"])
+                if current and current.get("status") == "sending":
+                    current.update(
+                        status="uncertain",
+                        message="Server stopped while adding the comment. Check Meta before retrying.",
+                        updatedAt=now(),
+                    )
+                    await self.store.put("first_comments", current)
+        await self.reconcile_first_comments()
+
+    async def process_first_comments(self, post_id=None):
+        """Reconcile published receipts and deliver all safe pending comment jobs."""
+        await self.reconcile_first_comments(post_id)
+        records = await self.store.all("first_comments")
+        await asyncio.gather(
+            *(
+                self.deliver_first_comment(record["id"])
+                for record in records
+                if record.get("status") == "pending"
+                and (not record.get("retryAt") or record["retryAt"] <= now())
+                and (post_id is None or record.get("postId") == post_id)
+            )
+        )
+
+    async def deliver_first_comment(self, identity):
+        lock = self.first_comment_locks.setdefault(identity, asyncio.Lock())
+        async with lock:
+            record = await self.store.get("first_comments", identity)
+            if not record or record.get("status") != "pending":
+                return
+            post = await self.store.get("posts", record["postId"])
+            account = await self.store.get("accounts", record["accountId"])
+            if not post or not account or account.get("demo"):
+                record.update(
+                    status="needs_review",
+                    message="The destination account is unavailable. Review the published post manually.",
+                    updatedAt=now(),
+                )
+                await self.store.put("first_comments", record)
+                return
+            latest = next(
+                (
+                    receipt
+                    for receipt in reversed(post.get("results", []))
+                    if receipt.get("accountId") == record["accountId"]
+                ),
+                None,
+            )
+            current_text = post.get("firstComments", {}).get(record["platform"], "")
+            if (
+                account.get("platform") != record["platform"]
+                or not latest
+                or latest.get("status") != "published"
+                or str(latest.get("remoteId") or "") != record["remotePostId"]
+                or not isinstance(current_text, str)
+                or current_text.strip() != record["text"]
+                or not self.valid_comment_post_id(
+                    record["platform"], account, record["remotePostId"]
+                )
+            ):
+                record.update(
+                    status="needs_review",
+                    message="The confirmed post or comment settings changed before delivery. Review the destination manually.",
+                    updatedAt=now(),
+                )
+                await self.store.put("first_comments", record)
+                return
+
+            account_lock = self.account_locks.setdefault(record["accountId"], asyncio.Lock())
+            async with account_lock:
+                account = await self.store.get("accounts", record["accountId"])
+                if (
+                    not account
+                    or account.get("demo")
+                    or account.get("platform") != record["platform"]
+                ):
+                    record.update(
+                        status="needs_review",
+                        message="The destination account is unavailable. Review the published post manually.",
+                        updatedAt=now(),
+                    )
+                    await self.store.put("first_comments", record)
+                    return
+                record.update(
+                    status="sending",
+                    attempts=record.get("attempts", 0) + 1,
+                    updatedAt=now(),
+                )
+                record.pop("message", None)
+                await self.store.put("first_comments", record)
+                try:
+                    remote_comment_id = await self.providers.create_first_comment(
+                        account, record["remotePostId"], record["text"]
+                    )
+                except ProviderError as error:
+                    if not error.uncertain and error.code in FIRST_COMMENT_RATE_LIMIT_CODES:
+                        from datetime import datetime, timedelta, timezone
+
+                        delay = min(900, 15 * (2 ** min(record["attempts"] - 1, 6)))
+                        retry_at = (
+                            datetime.now(timezone.utc) + timedelta(seconds=delay)
+                        ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                        record.update(
+                            status="pending",
+                            retryAt=retry_at,
+                            message="Meta rate limit reached. The comment will be retried automatically.",
+                            updatedAt=now(),
+                        )
+                    else:
+                        record.update(
+                            status="uncertain" if error.uncertain else "rejected",
+                            message=str(error),
+                            updatedAt=now(),
+                        )
+                except ValueError as error:
+                    record.update(status="rejected", message=str(error), updatedAt=now())
+                except Exception:
+                    record.update(
+                        status="uncertain",
+                        message="No reliable comment receipt. Check Meta before retrying.",
+                        updatedAt=now(),
+                    )
+                else:
+                    record.update(
+                        status="sent",
+                        remoteCommentId=str(remote_comment_id),
+                        message="First comment added.",
+                        updatedAt=now(),
+                    )
+                await self.store.put("first_comments", record)
+
+    async def retry_first_comment(self, post_id, account_id):
+        """Retry a comment only after Meta confirmed the prior attempt was rejected."""
+        identity = self.first_comment_record_id(post_id, account_id)
+        lock = self.first_comment_locks.setdefault(identity, asyncio.Lock())
+        async with lock:
+            record = await self.store.get("first_comments", identity)
+            if not record:
+                raise ValueError("No first comment is available to retry.")
+            if record.get("status") != "rejected":
+                raise ValueError("Only a confirmed rejected first comment can be retried.")
+            post = await self.store.get("posts", post_id)
+            latest = next(
+                (
+                    receipt
+                    for receipt in reversed(post.get("results", []))
+                    if receipt.get("accountId") == account_id
+                ),
+                None,
+            ) if post else None
+            current_text = post.get("firstComments", {}).get(record["platform"], "") if post else ""
+            if (
+                not post
+                or not latest
+                or latest.get("status") != "published"
+                or str(latest.get("remoteId") or "") != record["remotePostId"]
+                or not isinstance(current_text, str)
+                or current_text.strip() != record["text"]
+            ):
+                record.update(
+                    status="needs_review",
+                    message="The confirmed post or comment settings changed. Review the destination manually.",
+                    updatedAt=now(),
+                )
+                await self.store.put("first_comments", record)
+                raise ValueError("The confirmed post or comment settings changed; review it manually.")
+            record.update(status="pending", message="Comment retry queued.", updatedAt=now())
+            record.pop("retryAt", None)
+            await self.store.put("first_comments", record)
+            self.wake.set()
+            return record
 
     async def validate(self, post):
         images = [await self.image(id) for id in post.get("mediaIds", [])]
@@ -347,10 +652,12 @@ class Scheduler:
                 )
         finally:
             self.active.discard(id)
+        await self.process_first_comments(id)
 
     async def tick(self):
         posts = await self.store.due(now())
         await asyncio.gather(*(self.deliver(post["id"]) for post in posts))
+        await self.process_first_comments()
 
     async def loop(self):
         while not self.stopping:

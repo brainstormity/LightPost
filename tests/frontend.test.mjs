@@ -21,6 +21,13 @@ test('dialogs, retry actions, and cancellation controls', async () => {
   };
   const fields = { innerHTML: '' };
   const platformField = { value: 'x' };
+  const postForm = {};
+  const postText = { value: 'Post text' };
+  const scheduledAt = { value: '' };
+  const xAllowLinks = { checked: false };
+  const firstCommentFields = { innerHTML: '' };
+  let accountCheckboxes = [];
+  let firstCommentInputs = [];
   const pageElement = { innerHTML: '' };
   const postListElement = { innerHTML: '' };
   const pagination = { innerHTML: '' };
@@ -31,6 +38,11 @@ test('dialogs, retry actions, and cancellation controls', async () => {
           '#root': {},
           '#modal': modal,
           '#platform': platformField,
+          '#post-form': postForm,
+          '#post-text': postText,
+          '#scheduled-at': scheduledAt,
+          '#x-allow-links': xAllowLinks,
+          '#first-comments-fields': firstCommentFields,
           '#page': pageElement,
           '#connect-fields': fields,
           '#post-list': postListElement,
@@ -38,7 +50,11 @@ test('dialogs, retry actions, and cancellation controls', async () => {
         }[selector] || null
       );
     },
-    querySelectorAll() {
+    querySelectorAll(selector) {
+      if (selector === 'input[name="account"]:checked')
+        return accountCheckboxes.filter((input) => input.checked);
+      if (selector === 'input[name="account"]') return accountCheckboxes;
+      if (selector === '[data-first-comment]') return firstCommentInputs;
       return [];
     },
     addEventListener(type, callback) {
@@ -68,6 +84,74 @@ test('dialogs, retry actions, and cancellation controls', async () => {
     "state = {accounts: [], media: [], platforms: [{id: 'x', name: 'X', help: 'X setup'}]};",
     context,
   );
+  vm.runInContext(
+    `state.accounts = [
+      {id: 'ig', platform: 'instagram'},
+      {id: 'fb', platform: 'facebook'},
+      {id: 'x', platform: 'x'},
+    ];
+    composer.accountIds = ['ig'];
+    composer.firstComments = cleanFirstComments({
+      instagram: '  Launch details  ', facebook: '  Page update  ', youtube: 'ignore me',
+    });
+    renderFirstCommentFields();`,
+    context,
+  );
+  assert.ok(firstCommentFields.innerHTML.includes('Instagram first comment'));
+  assert.ok(!firstCommentFields.innerHTML.includes('Facebook Pages first comment'));
+  accountCheckboxes = [{ value: 'ig', checked: true }];
+  firstCommentInputs = [{ dataset: { firstComment: 'instagram' }, value: '  Edited caption  ' }];
+  vm.runInContext('readComposer()', context);
+  assert.deepEqual(JSON.parse(vm.runInContext('JSON.stringify(composer.firstComments)', context)), {
+    instagram: 'Edited caption',
+    facebook: 'Page update',
+  });
+  accountCheckboxes[0].checked = false;
+  vm.runInContext('readComposer(); renderFirstCommentFields();', context);
+  assert.equal(firstCommentFields.innerHTML, '');
+  assert.equal(vm.runInContext('composer.firstComments.instagram', context), 'Edited caption');
+  firstCommentInputs = [];
+  accountCheckboxes[0].checked = true;
+  vm.runInContext('readComposer(); renderFirstCommentFields();', context);
+  assert.ok(firstCommentFields.innerHTML.includes('>Edited caption</textarea>'));
+  accountCheckboxes = [{ value: 'fb', checked: true }];
+  firstCommentInputs = [{ dataset: { firstComment: 'facebook' }, value: '   ' }];
+  vm.runInContext('readComposer(); renderFirstCommentFields();', context);
+  assert.equal(vm.runInContext('composer.firstComments.facebook', context), undefined);
+  assert.ok(firstCommentFields.innerHTML.includes('Facebook Pages first comment'));
+  assert.ok(!firstCommentFields.innerHTML.includes('Instagram first comment'));
+  accountCheckboxes = [
+    { value: 'ig', checked: false },
+    { value: 'fb', checked: false },
+    { value: 'x', checked: false },
+  ];
+  firstCommentInputs = [];
+  vm.runInContext('updatePreview = () => {};', context);
+  const selectAll = {
+    id: 'select-all-accounts',
+    dataset: {},
+    checked: true,
+    closest: (selector) => (selector === '#post-form' ? postForm : null),
+  };
+  for (const handler of handlers.input) handler({ target: selectAll });
+  assert.ok(accountCheckboxes.every((input) => input.checked));
+  assert.ok(firstCommentFields.innerHTML.includes('Instagram first comment'));
+  assert.ok(firstCommentFields.innerHTML.includes('Facebook Pages first comment'));
+  firstCommentInputs = [
+    { dataset: { firstComment: 'instagram' }, value: 'Keep Instagram' },
+    { dataset: { firstComment: 'facebook' }, value: 'Keep Facebook' },
+  ];
+  selectAll.checked = false;
+  for (const handler of handlers.input) handler({ target: selectAll });
+  assert.ok(accountCheckboxes.every((input) => !input.checked));
+  assert.equal(firstCommentFields.innerHTML, '');
+  assert.equal(vm.runInContext('composer.firstComments.instagram', context), 'Keep Instagram');
+  assert.equal(vm.runInContext('composer.firstComments.facebook', context), 'Keep Facebook');
+  firstCommentInputs = [];
+  selectAll.checked = true;
+  for (const handler of handlers.input) handler({ target: selectAll });
+  assert.ok(firstCommentFields.innerHTML.includes('>Keep Instagram</textarea>'));
+  assert.ok(firstCommentFields.innerHTML.includes('>Keep Facebook</textarea>'));
   for (const [action, expected] of [
     ['source-image', 'Direct JPEG URL'],
     ['library', 'Saved Library'],
@@ -264,7 +348,7 @@ test('dialogs, retry actions, and cancellation controls', async () => {
   const landing = vm.runInContext('root.innerHTML', context);
   assert.ok(landing.indexOf('</h1>') < landing.indexOf('class="hero-platforms"'));
   const logos = [...landing.matchAll(/src="(\/logos\/[^"]+)"/g)].map((match) => match[1]);
-  assert.equal(logos.length, 12);
+  assert.equal(logos.length, 13);
   assert.ok(!/under development/i.test(landing));
   for (const [platform, count] of [
     ['instagram', 14],
